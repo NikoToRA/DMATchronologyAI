@@ -1,0 +1,30 @@
+# FastAPI
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Azure SDK
+azure-storage-blob>=12.19.0
+aiohttp>=3.9.0  # Required for async Azure Blob operations
+openai>=1.12.0
+azure-cognitiveservices-speech>=1.47.0
+
+# Pydantic
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# WebSocket
+websockets==12.0
+
+# Utilities
+python-dotenv==1.0.0
+httpx==0.26.0
+aiofiles==23.2.1
+
+# Audio processing
+pydub>=0.25.1
+audioop-lts>=0.2.2  # Python 3.13+ compatibility for pydub
+numpy>=1.26.0
+
+# Zoom SDK
+PyJWT==2.8.0

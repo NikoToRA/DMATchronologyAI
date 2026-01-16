@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chronologyai.local/schemas/hq_master.schema.json",
+  "title": "HQ Master Configuration",
+  "description": "Schema for HQ Master (Headquarters) configuration list",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "hq_id": {
+        "type": "string",
+        "description": "Unique identifier for the HQ",
+        "pattern": "^hq-\\d{3}$|^[a-f0-9-]{36}$",
+        "examples": ["hq-001", "550e8400-e29b-41d4-a716-446655440000"]
+      },
+      "hq_name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Display name for the HQ",
+        "examples": ["本部長", "統括DMAT", "医療班本部"]
+      },
+      "zoom_pattern": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Pattern to match in Zoom display names for automatic HQ identification",
+        "examples": ["本部長", "統括DMAT", "医療班"]
+      },
+      "active": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether this HQ is currently active"
+      }
+    },
+    "required": ["hq_id", "hq_name", "zoom_pattern"],
+    "additionalProperties": false
+  },
+  "minItems": 0,
+  "uniqueItems": true
+}

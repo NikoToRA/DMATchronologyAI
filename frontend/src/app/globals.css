@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-rgb: 249, 250, 251;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* Category badges */
+.category-badge {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+}
+
+.category-指示 {
+  @apply bg-red-100 text-red-800;
+}
+
+.category-依頼 {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.category-報告 {
+  @apply bg-blue-100 text-blue-800;
+}
+
+.category-決定 {
+  @apply bg-green-100 text-green-800;
+}
+
+.category-確認 {
+  @apply bg-purple-100 text-purple-800;
+}
+
+.category-リスク {
+  @apply bg-orange-100 text-orange-800;
+}
+
+.category-その他 {
+  @apply bg-gray-100 text-gray-800;
+}
+
+/* Status badges */
+.status-running {
+  @apply bg-green-100 text-green-800;
+}
+
+.status-waiting {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.status-ended {
+  @apply bg-gray-100 text-gray-800;
+}
+
+/* Animations */
+@keyframes pulse-dot {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Table styles */
+.data-table {
+  @apply min-w-full divide-y divide-gray-200;
+}
+
+.data-table th {
+  @apply px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50;
+}
+
+.data-table td {
+  @apply px-4 py-3 text-sm text-gray-900;
+}
+
+.data-table tr:hover {
+  @apply bg-gray-50;
+}
