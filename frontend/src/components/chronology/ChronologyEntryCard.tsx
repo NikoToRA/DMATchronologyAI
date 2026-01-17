@@ -26,6 +26,7 @@ export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }
   const [draftSummary, setDraftSummary] = useState(entry.summary);
   const [draftTextRaw, setDraftTextRaw] = useState(entry.text_raw);
   const aiNote = entry.ai_note ?? '';
+  const [draftAiNote, setDraftAiNote] = useState(aiNote);
   const [draftCategory, setDraftCategory] = useState(entry.category);
   const [draftHasTask, setDraftHasTask] = useState(hasTask);
   const [draftHqId, setDraftHqId] = useState<string>(entry.hq_id ?? '');
@@ -35,15 +36,17 @@ export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }
     return (
       draftSummary !== entry.summary ||
       draftTextRaw !== entry.text_raw ||
+      draftAiNote !== aiNote ||
       draftCategory !== entry.category ||
       draftHasTask !== hasTask ||
       draftHqId !== (entry.hq_id ?? '')
     );
-  }, [draftCategory, draftHasTask, draftSummary, draftTextRaw, draftHqId, entry, hasTask]);
+  }, [draftCategory, draftHasTask, draftSummary, draftTextRaw, draftAiNote, draftHqId, entry, hasTask, aiNote]);
 
   const startEdit = useCallback(() => {
     setDraftSummary(entry.summary);
     setDraftTextRaw(entry.text_raw);
+    setDraftAiNote(entry.ai_note ?? '');
     setDraftCategory(entry.category);
     setDraftHasTask(hasTask);
     setDraftHqId(entry.hq_id ?? '');
@@ -55,6 +58,7 @@ export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }
     setIsEditing(false);
     setDraftSummary(entry.summary);
     setDraftTextRaw(entry.text_raw);
+    setDraftAiNote(entry.ai_note ?? '');
     setDraftCategory(entry.category);
     setDraftHasTask(hasTask);
     setDraftHqId(entry.hq_id ?? '');
@@ -65,6 +69,7 @@ export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }
     const payload: UpdateChronologyPayload = {
       summary: draftSummary.trim(),
       text_raw: draftTextRaw.trim(),
+      ai_note: draftAiNote.trim() || null,
       category: draftCategory,
       has_task: draftHasTask,
       hq_id: draftHqId ? draftHqId : null,
@@ -72,7 +77,7 @@ export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }
     };
     onUpdate(entry.entry_id, payload);
     setIsEditing(false);
-  }, [draftCategory, draftHasTask, draftHqId, draftSummary, draftTextRaw, entry.entry_id, onUpdate]);
+  }, [draftCategory, draftHasTask, draftHqId, draftSummary, draftTextRaw, draftAiNote, entry.entry_id, onUpdate]);
 
   const cardClasses = `bg-white rounded-lg shadow-sm p-4 ${
     !entry.is_hq_confirmed ? 'border-l-4 border-yellow-400' : ''
@@ -93,9 +98,11 @@ export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }
             isEditing={isEditing}
             summary={draftSummary}
             textRaw={draftTextRaw}
-            aiNote={aiNote}
+            aiNote={draftAiNote}
+            displayAiNote={aiNote}
             onSummaryChange={setDraftSummary}
             onTextRawChange={setDraftTextRaw}
+            onAiNoteChange={setDraftAiNote}
           />
         </div>
 
@@ -165,38 +172,58 @@ interface ContentColumnProps {
   isEditing: boolean;
   summary: string;
   textRaw: string;
-  aiNote?: string;
+  aiNote: string;
+  displayAiNote: string;
   onSummaryChange: (v: string) => void;
   onTextRawChange: (v: string) => void;
+  onAiNoteChange: (v: string) => void;
 }
 
-function ContentColumn({ isEditing, summary, textRaw, aiNote, onSummaryChange, onTextRawChange }: ContentColumnProps) {
+function ContentColumn({ isEditing, summary, textRaw, aiNote, displayAiNote, onSummaryChange, onTextRawChange, onAiNoteChange }: ContentColumnProps) {
   return (
     <div className="flex-1 min-w-0">
       {isEditing ? (
         <div className="space-y-2">
-          <input
-            value={summary}
-            onChange={(e) => onSummaryChange(e.target.value)}
-            className="w-full px-2 py-1 border border-gray-300 rounded"
-            placeholder="内容（要約）"
-          />
-          <textarea
-            value={textRaw}
-            onChange={(e) => onTextRawChange(e.target.value)}
-            className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
-            rows={3}
-            placeholder="内容（本文）"
-          />
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">表題（1行）</label>
+            <input
+              value={summary}
+              onChange={(e) => onSummaryChange(e.target.value)}
+              className="w-full px-2 py-1 border border-gray-300 rounded"
+              placeholder="表題（1行）"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">AI要約（本文）</label>
+            <textarea
+              value={aiNote}
+              onChange={(e) => onAiNoteChange(e.target.value)}
+              className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+              rows={3}
+              placeholder="AI要約（本文）"
+            />
+          </div>
+          <details className="mt-1">
+            <summary className="cursor-pointer text-xs text-gray-500 select-none">
+              文字起こし（編集）
+            </summary>
+            <textarea
+              value={textRaw}
+              onChange={(e) => onTextRawChange(e.target.value)}
+              className="w-full px-2 py-1 border border-gray-300 rounded text-xs mt-1"
+              rows={2}
+              placeholder="文字起こし（元テキスト）"
+            />
+          </details>
         </div>
       ) : (
         <>
           {/* Title (1-line) */}
           <p className="font-medium text-gray-900">{summary}</p>
           {/* AI note (preferred). If absent, show nothing here. */}
-          {!!aiNote && (
+          {!!displayAiNote && (
             <p className="text-sm text-gray-700 mt-1 whitespace-pre-wrap">
-              {aiNote}
+              {displayAiNote}
             </p>
           )}
           {/* Transcript is stored but hidden by default */}

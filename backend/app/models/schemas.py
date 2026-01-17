@@ -482,6 +482,76 @@ class ZoomCredentialsUpdate(BaseSchema):
     account_id: Optional[str] = None
 
 
+# ========== LLM Settings Models ==========
+class LLMSettings(BaseSchema):
+    """LLM prompt configuration settings."""
+
+    system_prompt: str = Field(
+        default="",
+        description="System prompt for the LLM classifier",
+    )
+    temperature: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=2.0,
+        description="LLM temperature (0-2)",
+    )
+    max_tokens: int = Field(
+        default=300,
+        ge=1,
+        le=4000,
+        description="Maximum tokens for LLM response",
+    )
+
+
+class LLMSettingsUpdate(BaseSchema):
+    """Schema for updating LLM settings."""
+
+    system_prompt: Optional[str] = None
+    temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=4000)
+
+
+# ========== User Dictionary Models ==========
+class DictionaryEntry(BaseSchema):
+    """Single dictionary entry for STT correction."""
+
+    entry_id: str = Field(
+        default_factory=generate_uuid,
+        description="Unique entry identifier",
+    )
+    wrong_text: str = Field(
+        ...,
+        description="Incorrect text (what STT outputs)",
+        examples=["ディーマット", "てぃーまっと"],
+    )
+    correct_text: str = Field(
+        ...,
+        description="Correct text (what it should be)",
+        examples=["DMAT"],
+    )
+    active: bool = Field(
+        default=True,
+        description="Whether this entry is active",
+    )
+
+
+class DictionaryEntryCreate(BaseSchema):
+    """Schema for creating a dictionary entry."""
+
+    wrong_text: str = Field(..., min_length=1)
+    correct_text: str = Field(..., min_length=1)
+    active: bool = Field(default=True)
+
+
+class DictionaryEntryUpdate(BaseSchema):
+    """Schema for updating a dictionary entry."""
+
+    wrong_text: Optional[str] = None
+    correct_text: Optional[str] = None
+    active: Optional[bool] = None
+
+
 # ========== Response Models ==========
 class SessionResponse(Session):
     """Extended session response with counts."""

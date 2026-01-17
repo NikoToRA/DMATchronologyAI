@@ -113,6 +113,21 @@ export interface SystemStatus {
   readonly storage_type: StorageType;
 }
 
+/** LLM Settings */
+export interface LLMSettings {
+  system_prompt: string;
+  temperature: number;
+  max_tokens: number;
+}
+
+/** Dictionary entry for STT correction */
+export interface DictionaryEntry {
+  readonly entry_id: string;
+  wrong_text: string;
+  correct_text: string;
+  active: boolean;
+}
+
 // =============================================================================
 // API Request/Response Types
 // =============================================================================
@@ -132,7 +147,7 @@ export type UpdateParticipantPayload = Partial<Pick<Participant, 'hq_id' | 'is_d
 
 /** Chronology entry update payload */
 export type UpdateChronologyPayload = Partial<
-  Pick<ChronologyEntry, 'category' | 'summary' | 'text_raw' | 'is_hq_confirmed' | 'hq_id' | 'has_task'>
+  Pick<ChronologyEntry, 'category' | 'summary' | 'text_raw' | 'ai_note' | 'is_hq_confirmed' | 'hq_id' | 'has_task'>
 >;
 
 /** Chronology list query parameters */
@@ -350,6 +365,30 @@ export const settingsApi = {
 
   /** Get system status */
   getStatus: () => api.get<SystemStatus>('/api/settings/status'),
+
+  /** Get LLM settings */
+  getLLMSettings: () => api.get<LLMSettings>('/api/settings/llm'),
+
+  /** Get default LLM prompt */
+  getDefaultLLMPrompt: () => api.get<{ default_prompt: string }>('/api/settings/llm/default-prompt'),
+
+  /** Update LLM settings */
+  updateLLMSettings: (data: Partial<LLMSettings>) =>
+    api.put<LLMSettings>('/api/settings/llm', data),
+
+  /** Get dictionary entries */
+  getDictionary: () => api.get<DictionaryEntry[]>('/api/settings/dictionary'),
+
+  /** Create dictionary entry */
+  createDictionaryEntry: (data: { wrong_text: string; correct_text: string; active?: boolean }) =>
+    api.post<DictionaryEntry>('/api/settings/dictionary', data),
+
+  /** Update dictionary entry */
+  updateDictionaryEntry: (id: string, data: Partial<Pick<DictionaryEntry, 'wrong_text' | 'correct_text' | 'active'>>) =>
+    api.patch<DictionaryEntry>(`/api/settings/dictionary/${id}`, data),
+
+  /** Delete dictionary entry */
+  deleteDictionaryEntry: (id: string) => api.delete<void>(`/api/settings/dictionary/${id}`),
 } as const;
 
 /**

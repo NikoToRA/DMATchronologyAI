@@ -19,8 +19,10 @@ from azure.storage.blob.aio import BlobServiceClient, ContainerClient
 from ..config import settings
 from ..models.schemas import (
     ChronologyEntry,
+    DictionaryEntry,
     HQMaster,
     Incident,
+    LLMSettings,
     Participant,
     Segment,
     Session,
@@ -1230,6 +1232,157 @@ class StorageService:
         except OSError as e:
             logger.error(f"Failed to save Zoom credentials config: {e}")
             raise StorageWriteError(f"Failed to save Zoom credentials: {e}") from e
+
+    # ========== LLM Settings Operations ==========
+
+    async def get_llm_settings(self) -> LLMSettings:
+        """
+        Get LLM settings from configuration.
+
+        Returns:
+            LLMSettings object with custom prompt or defaults.
+        """
+        config_file = self.config_path / "llm_settings.json"
+        if not config_file.exists():
+            logger.debug("LLM settings config not found, returning defaults")
+            return LLMSettings()
+        try:
+            async with aiofiles.open(config_file, "r", encoding="utf-8") as f:
+                content = await f.read()
+                data = json.loads(content)
+                return LLMSettings(**data)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to read LLM settings config: {e}")
+            return LLMSettings()
+
+    async def save_llm_settings(self, settings_data: LLMSettings) -> None:
+        """
+        Save LLM settings to configuration.
+
+        Args:
+            settings_data: The LLMSettings object to save.
+
+        Raises:
+            StorageWriteError: If saving fails.
+        """
+        config_file = self.config_path / "llm_settings.json"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        content = json.dumps(settings_data.model_dump(), ensure_ascii=False, indent=2)
+        try:
+            async with aiofiles.open(config_file, "w", encoding="utf-8") as f:
+                await f.write(content)
+            logger.info("Saved LLM settings config")
+        except OSError as e:
+            logger.error(f"Failed to save LLM settings config: {e}")
+            raise StorageWriteError(f"Failed to save LLM settings: {e}") from e
+
+    # ========== User Dictionary Operations ==========
+
+    async def get_dictionary_entries(self) -> List[DictionaryEntry]:
+        """
+        Get user dictionary entries for STT correction.
+
+        Returns:
+            List of DictionaryEntry objects.
+        """
+        config_file = self.config_path / "user_dictionary.json"
+        if not config_file.exists():
+            logger.debug("User dictionary config not found, returning empty list")
+            return []
+        try:
+            async with aiofiles.open(config_file, "r", encoding="utf-8") as f:
+                content = await f.read()
+                data = json.loads(content)
+                if isinstance(data, list):
+                    return [DictionaryEntry(**entry) for entry in data]
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to read user dictionary config: {e}")
+        return []
+
+    async def save_dictionary_entries(self, entries: List[DictionaryEntry]) -> None:
+        """
+        Save user dictionary entries.
+
+        Args:
+            entries: List of DictionaryEntry objects to save.
+
+        Raises:
+            StorageWriteError: If saving fails.
+        """
+        config_file = self.config_path / "user_dictionary.json"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        content = json.dumps(
+            [e.model_dump() for e in entries], ensure_ascii=False, indent=2
+        )
+        try:
+            async with aiofiles.open(config_file, "w", encoding="utf-8") as f:
+                await f.write(content)
+            logger.info(f"Saved user dictionary with {len(entries)} entries")
+        except OSError as e:
+            logger.error(f"Failed to save user dictionary config: {e}")
+            raise StorageWriteError(f"Failed to save user dictionary: {e}") from e
+
+    async def add_dictionary_entry(self, entry: DictionaryEntry) -> DictionaryEntry:
+        """
+        Add a new dictionary entry.
+
+        Args:
+            entry: The DictionaryEntry object to add.
+
+        Returns:
+            The added DictionaryEntry object.
+        """
+        entries = await self.get_dictionary_entries()
+        entries.append(entry)
+        logger.info(f"Adding dictionary entry: {entry.wrong_text} -> {entry.correct_text}")
+        await self.save_dictionary_entries(entries)
+        return entry
+
+    async def update_dictionary_entry(
+        self, entry_id: str, updates: Dict[str, Any]
+    ) -> Optional[DictionaryEntry]:
+        """
+        Update a dictionary entry.
+
+        Args:
+            entry_id: The unique entry identifier.
+            updates: Dictionary of fields to update.
+
+        Returns:
+            The updated DictionaryEntry if found, None otherwise.
+        """
+        entries = await self.get_dictionary_entries()
+        for i, entry in enumerate(entries):
+            if entry.entry_id == entry_id:
+                for key, value in updates.items():
+                    if value is not None:
+                        setattr(entry, key, value)
+                entries[i] = entry
+                logger.info(f"Updating dictionary entry: {entry_id}")
+                await self.save_dictionary_entries(entries)
+                return entry
+        logger.warning(f"Dictionary entry not found for update: {entry_id}")
+        return None
+
+    async def delete_dictionary_entry(self, entry_id: str) -> bool:
+        """
+        Delete a dictionary entry.
+
+        Args:
+            entry_id: The unique entry identifier.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        entries = await self.get_dictionary_entries()
+        for i, entry in enumerate(entries):
+            if entry.entry_id == entry_id:
+                entries.pop(i)
+                logger.info(f"Deleting dictionary entry: {entry_id}")
+                await self.save_dictionary_entries(entries)
+                return True
+        logger.warning(f"Dictionary entry not found for deletion: {entry_id}")
+        return False
 
     # ========== Cleanup ==========
 

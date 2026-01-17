@@ -62,6 +62,30 @@ class ClassifierService:
         報告: 救急車の配備が完了
     """
 
+    # Fillers (つなぎ言葉) to remove from transcribed text
+    FILLER_PATTERNS: List[str] = [
+        r"^ええと[、,\s]*",
+        r"^えーと[、,\s]*",
+        r"^えっと[、,\s]*",
+        r"^えー[、,\s]*",
+        r"^あー[、,\s]*",
+        r"^あのー[、,\s]*",
+        r"^あの[、,\s]+",
+        r"^まあ[、,\s]+",
+        r"^そのー[、,\s]*",
+        r"^なんか[、,\s]+",
+        r"^こう[、,\s]+",
+        r"^ね[、,\s]+",
+        r"[、,\s]+ええと[、,\s]*",
+        r"[、,\s]+えーと[、,\s]*",
+        r"[、,\s]+えっと[、,\s]*",
+        r"[、,\s]+えー[、,\s]*",
+        r"[、,\s]+あー[、,\s]*",
+        r"[、,\s]+あのー[、,\s]*",
+        r"[、,\s]+あの[、,\s]+",
+        r"[、,\s]+まあ[、,\s]+",
+    ]
+
     # Keyword mappings for fallback classification
     CATEGORY_KEYWORDS: Dict[Category, List[str]] = {
         Category.INSTRUCTION: [
@@ -121,7 +145,7 @@ class ClassifierService:
     # OpenAI API configuration
     _API_VERSION: str = "2024-02-15-preview"
     _DEFAULT_TEMPERATURE: float = 0.3
-    _DEFAULT_MAX_TOKENS: int = 100
+    _DEFAULT_MAX_TOKENS: int = 300  # Increased for summary + ai_note output
 
     def __init__(self) -> None:
         """Initialize the classifier service with Azure OpenAI credentials."""
@@ -172,6 +196,59 @@ class ClassifierService:
             True if Azure OpenAI endpoint and API key are set.
         """
         return bool(self.endpoint and self.api_key)
+
+    def _remove_fillers(self, text: str) -> str:
+        """
+        Remove filler words (つなぎ言葉) from text.
+
+        Args:
+            text: Text to process.
+
+        Returns:
+            Text with fillers removed.
+        """
+        result = text
+        for pattern in self.FILLER_PATTERNS:
+            result = re.sub(pattern, "", result)
+        return result.strip()
+
+    async def _apply_dictionary(self, text: str) -> str:
+        """
+        Apply user dictionary replacements to text.
+
+        Args:
+            text: Text to process.
+
+        Returns:
+            Text with dictionary replacements applied.
+        """
+        try:
+            from .storage import storage_service
+            entries = await storage_service.get_dictionary_entries()
+            result = text
+            for entry in entries:
+                if entry.active:
+                    result = result.replace(entry.wrong_text, entry.correct_text)
+            return result
+        except Exception as e:
+            logger.warning(f"Failed to apply dictionary: {e}")
+            return text
+
+    async def preprocess_text(self, text: str) -> str:
+        """
+        Preprocess transcribed text by removing fillers and applying dictionary.
+
+        Args:
+            text: Raw transcribed text.
+
+        Returns:
+            Preprocessed text ready for classification.
+        """
+        # First apply dictionary replacements
+        text = await self._apply_dictionary(text)
+        # Then remove fillers
+        text = self._remove_fillers(text)
+        return text
 
     def _keyword_classify(self, text: str) -> Optional[Category]:
         """
@@ -225,10 +302,10 @@ class ClassifierService:
                 reserved for future prompt enhancement).
 
         Returns:
-            Tuple of (category, summary).
+            Tuple of (category, summary, ai_note).
 
         Note:
-            Returns (Category.OTHER, "") for empty text.
+            Returns (Category.OTHER, "", "") for empty text.
             Falls back to keyword classification on API errors.
         """
         # Handle empty text
@@ -236,40 +313,64 @@ class ClassifierService:
             logger.debug("Empty text provided, returning OTHER category")
             return Category.OTHER, "", ""
 
+        # Preprocess text: apply dictionary and remove fillers
+        processed_text = await self.preprocess_text(text)
+        if not processed_text:
+            logger.debug("Text empty after preprocessing")
+            return Category.OTHER, "", ""
+
         # Use keyword classification if OpenAI not configured
         if not self.is_configured():
             logger.debug("Using keyword-based classification (OpenAI not configured)")
-            return self._fallback_classify(text)
+            return self._fallback_classify(processed_text)
 
         client = self._get_client()
         if client is None:
             logger.warning("Failed to get OpenAI client, using fallback")
-            return self._fallback_classify(text)
+            return self._fallback_classify(processed_text)
 
         try:
-            result = await self._classify_with_openai(client, text)
+            result = await self._classify_with_openai(client, processed_text)
             if result is not None:
                 return result
 
             # OpenAI response couldn't be parsed
             logger.warning("Failed to parse OpenAI response, using fallback")
-            return self._fallback_classify(text)
+            return self._fallback_classify(processed_text)
 
         except RateLimitError as e:
             logger.warning(f"OpenAI rate limit exceeded: {e}")
-            return self._fallback_classify(text)
+            return self._fallback_classify(processed_text)
 
         except APIConnectionError as e:
             logger.error(f"OpenAI connection error: {e}")
-            return self._fallback_classify(text)
+            return self._fallback_classify(processed_text)
 
         except APIError as e:
             logger.error(f"OpenAI API error: {e}")
-            return self._fallback_classify(text)
+            return self._fallback_classify(processed_text)
 
         except Exception as e:
             logger.error(f"Unexpected classification error: {e}", exc_info=True)
-            return self._fallback_classify(text)
+            return self._fallback_classify(processed_text)
+
+    async def _get_llm_settings(self) -> tuple[str, float, int]:
+        """
+        Get LLM settings from storage, with fallback to defaults.
+
+        Returns:
+            Tuple of (system_prompt, temperature, max_tokens)
+        """
+        try:
+            from .storage import storage_service
+            llm_settings = await storage_service.get_llm_settings()
+            system_prompt = llm_settings.system_prompt if llm_settings.system_prompt else self.SYSTEM_PROMPT
+            temperature = llm_settings.temperature
+            max_tokens = llm_settings.max_tokens
+            return system_prompt, temperature, max_tokens
+        except Exception as e:
+            logger.warning(f"Failed to load LLM settings, using defaults: {e}")
+            return self.SYSTEM_PROMPT, self._DEFAULT_TEMPERATURE, self._DEFAULT_MAX_TOKENS
 
     async def _classify_with_openai(
         self,
@@ -291,14 +392,17 @@ class ClassifierService:
             APIConnectionError: On connection failures.
             RateLimitError: On rate limit exceeded.
         """
+        # Load LLM settings from storage
+        system_prompt, temperature, max_tokens = await self._get_llm_settings()
+
         response = await client.chat.completions.create(
             model=self.deployment,
             messages=[
-                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"発言: {text}"},
             ],
-            temperature=self._DEFAULT_TEMPERATURE,
-            max_tokens=self._DEFAULT_MAX_TOKENS,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
         content = response.choices[0].message.content

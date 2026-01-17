@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { Providers } from './providers';
-import { Sidebar } from '@/components/Sidebar';
 
 export const metadata: Metadata = {
   title: 'DMAT ChronologyAI',
@@ -17,12 +16,7 @@ export default function RootLayout({
     <html lang="ja">
       <body className="min-h-screen bg-gray-50">
         <Providers>
-          <div className="flex h-screen">
-            <Sidebar />
-            <main className="flex-1 overflow-auto">
-              {children}
-            </main>
-          </div>
+          {children}
         </Providers>
       </body>
     </html>

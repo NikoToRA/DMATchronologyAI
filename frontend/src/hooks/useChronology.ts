@@ -115,6 +115,8 @@ export interface UseChronologyOptions {
   enableWebSocket?: boolean;
   /** Polling interval in ms as fallback (default: 5000, set to 0 to disable) */
   pollingInterval?: number;
+  /** Backup sync interval in ms (default: 60000 = 1 minute, set to 0 to disable) */
+  backupSyncInterval?: number;
   /** Initial filter state */
   initialFilters?: Partial<ChronologyFilters>;
 }
@@ -143,6 +145,7 @@ export function useChronology(
   const {
     enableWebSocket = true,
     pollingInterval = 5000,
+    backupSyncInterval = 60000, // 1 minute backup sync
     initialFilters = {},
   } = options;
 
@@ -237,6 +240,20 @@ export function useChronology(
       ws.disconnect();
     };
   }, [sessionId, queryClient, enableWebSocket]);
+
+  // Backup sync interval - ensures data is periodically refreshed from server
+  useEffect(() => {
+    if (!backupSyncInterval || !sessionId) return;
+
+    const intervalId = setInterval(() => {
+      queryClient.invalidateQueries({
+        queryKey: chronologyQueryKeys.lists(),
+      });
+      console.log('[Chronology] Backup sync triggered');
+    }, backupSyncInterval);
+
+    return () => clearInterval(intervalId);
+  }, [sessionId, queryClient, backupSyncInterval]);
 
   // Filter setters
   const setFilters = useCallback((newFilters: Partial<ChronologyFilters>) => {

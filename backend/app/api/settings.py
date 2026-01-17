@@ -10,8 +10,13 @@ from typing import Any
 from fastapi import APIRouter
 
 from ..models.schemas import (
+    DictionaryEntry,
+    DictionaryEntryCreate,
+    DictionaryEntryUpdate,
     HQMaster,
     HQMasterCreate,
+    LLMSettings,
+    LLMSettingsUpdate,
     ZoomCredentials,
     ZoomCredentialsUpdate,
 )
@@ -205,3 +210,138 @@ async def get_system_status() -> dict[str, Any]:
         "openai_configured": classifier_service.is_configured(),
         "storage_type": "azure" if storage_service.use_azure else "local"
     }
+
+
+# =============================================================================
+# LLM Settings Management
+# =============================================================================
+
+@router.get("/llm", response_model=LLMSettings)
+async def get_llm_settings() -> LLMSettings:
+    """
+    Retrieve LLM prompt and configuration settings.
+
+    Returns:
+        LLM settings including system prompt, temperature, and max_tokens
+    """
+    settings = await storage_service.get_llm_settings()
+    # If system_prompt is empty, return the default from classifier
+    if not settings.system_prompt:
+        from ..services.classifier import ClassifierService
+        settings.system_prompt = ClassifierService.SYSTEM_PROMPT
+    return settings
+
+
+@router.get("/llm/default-prompt")
+async def get_default_llm_prompt() -> dict[str, str]:
+    """
+    Get the default LLM system prompt.
+
+    Returns:
+        Dictionary with default_prompt key
+    """
+    from ..services.classifier import ClassifierService
+    return {"default_prompt": ClassifierService.SYSTEM_PROMPT}
+
+
+@router.put("/llm", response_model=LLMSettings)
+async def update_llm_settings(data: LLMSettingsUpdate) -> LLMSettings:
+    """
+    Update LLM configuration settings.
+
+    Args:
+        data: Fields to update (system_prompt, temperature, max_tokens)
+
+    Returns:
+        Updated LLM settings
+    """
+    current = await storage_service.get_llm_settings()
+
+    if data.system_prompt is not None:
+        current.system_prompt = data.system_prompt
+    if data.temperature is not None:
+        current.temperature = data.temperature
+    if data.max_tokens is not None:
+        current.max_tokens = data.max_tokens
+
+    await storage_service.save_llm_settings(current)
+    return current
+
+
+# =============================================================================
+# User Dictionary Management
+# =============================================================================
+
+@router.get("/dictionary", response_model=list[DictionaryEntry])
+async def list_dictionary_entries() -> list[DictionaryEntry]:
+    """
+    Retrieve the list of user dictionary entries.
+
+    Dictionary entries are used to correct STT mistakes
+    (e.g., "ディーマット" -> "DMAT").
+
+    Returns:
+        List of all dictionary entries
+    """
+    return await storage_service.get_dictionary_entries()
+
+
+@router.post("/dictionary", response_model=DictionaryEntry, status_code=201)
+async def create_dictionary_entry(data: DictionaryEntryCreate) -> DictionaryEntry:
+    """
+    Create a new dictionary entry for STT correction.
+
+    Args:
+        data: Entry creation data including wrong_text and correct_text
+
+    Returns:
+        The newly created dictionary entry with generated entry_id
+    """
+    entry = DictionaryEntry(
+        wrong_text=data.wrong_text,
+        correct_text=data.correct_text,
+        active=data.active
+    )
+    return await storage_service.add_dictionary_entry(entry)
+
+
+@router.patch("/dictionary/{entry_id}", response_model=DictionaryEntry)
+async def update_dictionary_entry(entry_id: str, data: DictionaryEntryUpdate) -> DictionaryEntry:
+    """
+    Update a dictionary entry.
+
+    Args:
+        entry_id: The unique identifier of the entry to update
+        data: Fields to update (wrong_text, correct_text, active)
+
+    Returns:
+        The updated dictionary entry
+
+    Raises:
+        HTTPException: 404 if entry not found
+    """
+    updates = data.model_dump(exclude_unset=True)
+    entry = await storage_service.update_dictionary_entry(entry_id, updates)
+    if not entry:
+        raise NotFoundException("Dictionary entry", entry_id)
+    return entry
+
+
+@router.delete("/dictionary/{entry_id}")
+async def delete_dictionary_entry(entry_id: str) -> dict[str, str]:
+    """
+    Delete a dictionary entry.
+
+    Args:
+        entry_id: The unique identifier of the entry to delete
+
+    Returns:
+        Success confirmation message
+
+    Raises:
+        HTTPException: 404 if entry not found
+    """
+    success = await storage_service.delete_dictionary_entry(entry_id)
+    if not success:
+        raise NotFoundException("Dictionary entry", entry_id)
+    return create_success_response()

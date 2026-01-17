@@ -27,22 +27,35 @@ interface ProcessedEntry {
 // NOTE: If "silence" sits around -50dB (noisy room / AGC), using -60/-75 will never stop.
 // These defaults aim to work in that environment out-of-the-box.
 const DEFAULT_VAD = {
-  speechThresholdDb: -40,        // start when clearly above noise floor (e.g. noise -50, voice -20~-30)
-  silenceThresholdDb: -45,       // treat around/below noise floor as "silence" to allow stopping
-  silenceDurationMs: 1800,       // stop after this much "silence" to reduce latency
-  minRecordingDurationMs: 700,   // shorter => accept shorter utterances
-  maxRecordingDurationMs: 10000, // force-send chunk even if silence is never reached
+  speechThresholdDb: -45,        // start when clearly above noise floor (lowered for better sensitivity)
+  silenceThresholdDb: -50,       // treat around/below noise floor as "silence" to allow stopping
+  silenceDurationMs: 2000,       // stop after this much "silence" (increased to avoid cutting off speech)
+  minRecordingDurationMs: 500,   // shorter => accept shorter utterances
+  maxRecordingDurationMs: 15000, // force-send chunk (increased to allow longer utterances)
+  preRollMs: 500,                // pre-roll buffer to capture speech before detection
+  postRollMs: 300,               // post-roll tail to capture trailing speech
 } as const;
 
-type VadPreset = 'zoom' | 'quiet';
+type VadPreset = 'zoom' | 'quiet' | 'sensitive';
 const VAD_PRESETS: Record<VadPreset, typeof DEFAULT_VAD> = {
   zoom: DEFAULT_VAD,
   quiet: {
+    speechThresholdDb: -55,
+    silenceThresholdDb: -65,
+    silenceDurationMs: 2500,
+    minRecordingDurationMs: 400,
+    maxRecordingDurationMs: 20000,
+    preRollMs: 700,
+    postRollMs: 400,
+  },
+  sensitive: {
     speechThresholdDb: -50,
-    silenceThresholdDb: -60,
-    silenceDurationMs: 2000,
-    minRecordingDurationMs: 900,
-    maxRecordingDurationMs: 12000,
+    silenceThresholdDb: -55,
+    silenceDurationMs: 2500,
+    minRecordingDurationMs: 300,
+    maxRecordingDurationMs: 25000,
+    preRollMs: 800,
+    postRollMs: 500,
   },
 } as const;
 
@@ -77,6 +90,12 @@ export default function RecordPage() {
   const animationFrameRef = useRef<number | null>(null);
   const isRecordingRef = useRef<boolean>(false);
   const vadRef = useRef(vad);
+  // Pre-roll buffer: keep recent audio chunks to capture speech before VAD triggers
+  const preRollBufferRef = useRef<{ blob: Blob; timestamp: number }[]>([]);
+  const preRollRecorderRef = useRef<MediaRecorder | null>(null);
+  const isPreRollingRef = useRef<boolean>(false);
+  // Post-roll: delay stopping after silence detected
+  const postRollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     vadRef.current = vad;
@@ -188,16 +207,18 @@ export default function RecordPage() {
       setProcessedCount(prev => prev + 1);
       queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
 
-      // Continue monitoring: restart recorder so it doesn't stay inactive after a stop.
+      // Continue monitoring: restart recorder in listening mode (pre-roll capture)
       try {
         if (mediaRecorderRef.current && streamRef.current) {
           audioChunksRef.current = [];
+          preRollBufferRef.current = []; // Clear pre-roll buffer for fresh capture
           lastChunkSizeRef.current = 0;
           mediaRecorderRef.current.start(100);
-          isRecordingRef.current = true;
-          recordingStartRef.current = Date.now();
+          // Restart in listening mode - VAD will trigger recording on speech
+          isRecordingRef.current = false;
+          recordingStartRef.current = null;
           silenceStartRef.current = null;
-          setListeningState('recording');
+          setListeningState('listening');
           setRecordingDuration(0);
         } else {
           setListeningState('listening');
@@ -225,7 +246,18 @@ export default function RecordPage() {
     if (!mediaRecorderRef.current || isRecordingRef.current) return;
 
     console.log('Speech detected - starting recording');
-    audioChunksRef.current = [];
+
+    // Prepend pre-roll buffer to capture audio before VAD triggered
+    const preRollMs = vadRef.current.preRollMs || 500;
+    const now = Date.now();
+    const relevantPreRoll = preRollBufferRef.current.filter(
+      (chunk) => now - chunk.timestamp <= preRollMs
+    );
+    console.log(`Pre-roll: ${relevantPreRoll.length} chunks from buffer`);
+
+    // Start with pre-roll chunks
+    audioChunksRef.current = relevantPreRoll.map((chunk) => chunk.blob);
+
     try {
       mediaRecorderRef.current.start(100);
     } catch (e: any) {
@@ -238,6 +270,11 @@ export default function RecordPage() {
     isRecordingRef.current = true;
     recordingStartRef.current = Date.now();
     silenceStartRef.current = null;
+    // Clear any pending post-roll timeout
+    if (postRollTimeoutRef.current) {
+      clearTimeout(postRollTimeoutRef.current);
+      postRollTimeoutRef.current = null;
+    }
     setListeningState('recording');
     setRecordingDuration(0);
   }, []);
@@ -294,6 +331,30 @@ export default function RecordPage() {
     stopRecording();
   }, [listeningState, stopRecording]);
 
+  // Schedule stop with post-roll delay
+  const scheduleStop = useCallback((reason: string) => {
+    const postRollMs = vadRef.current.postRollMs || 300;
+
+    // Clear any existing post-roll timeout
+    if (postRollTimeoutRef.current) {
+      clearTimeout(postRollTimeoutRef.current);
+    }
+
+    postRollTimeoutRef.current = setTimeout(() => {
+      setLastStopReason(reason);
+      stopRecording();
+      postRollTimeoutRef.current = null;
+    }, postRollMs);
+  }, [stopRecording]);
+
+  // Cancel scheduled stop (if speech resumes)
+  const cancelScheduledStop = useCallback(() => {
+    if (postRollTimeoutRef.current) {
+      clearTimeout(postRollTimeoutRef.current);
+      postRollTimeoutRef.current = null;
+    }
+  }, []);
+
   // Voice Activity Detection loop
   const vadLoop = useCallback(() => {
     const volume = calculateVolume();
@@ -308,16 +369,20 @@ export default function RecordPage() {
           startRecording();
         }
       } else {
-        // Recording - check for silence
+        // Recording - check for silence with post-roll
         if (volume < vadRef.current.silenceThresholdDb) {
           if (!silenceStartRef.current) {
             silenceStartRef.current = now;
           } else if (now - silenceStartRef.current > vadRef.current.silenceDurationMs) {
-            setLastStopReason('silence');
-            stopRecording();
+            // Silence duration exceeded - schedule stop with post-roll
+            if (!postRollTimeoutRef.current) {
+              scheduleStop('silence');
+            }
           }
         } else {
+          // Speech detected - reset silence timer and cancel any pending stop
           silenceStartRef.current = null;
+          cancelScheduledStop();
         }
 
         // Force-stop after max duration to ensure we periodically send chunks even with background noise.
@@ -325,6 +390,7 @@ export default function RecordPage() {
           recordingStartRef.current &&
           now - recordingStartRef.current > vadRef.current.maxRecordingDurationMs
         ) {
+          cancelScheduledStop(); // Cancel any pending post-roll
           setLastStopReason('max');
           stopRecording();
           silenceStartRef.current = null;
@@ -338,7 +404,7 @@ export default function RecordPage() {
     }
 
     animationFrameRef.current = requestAnimationFrame(vadLoop);
-  }, [listeningState, calculateVolume, startRecording, stopRecording]);
+  }, [listeningState, calculateVolume, startRecording, stopRecording, scheduleStop, cancelScheduledStop]);
 
   // Start listening (initialize audio context and start VAD)
   const startListening = useCallback(async () => {
@@ -401,8 +467,21 @@ export default function RecordPage() {
       };
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-          lastChunkSizeRef.current = event.data.size;
+          // If actively recording, add to main chunks
+          if (isRecordingRef.current) {
+            audioChunksRef.current.push(event.data);
+            lastChunkSizeRef.current = event.data.size;
+          } else {
+            // If not recording (listening mode), add to pre-roll buffer
+            const now = Date.now();
+            preRollBufferRef.current.push({ blob: event.data, timestamp: now });
+
+            // Keep pre-roll buffer within reasonable size (last 2 seconds)
+            const preRollLimit = Math.max(vadRef.current.preRollMs || 500, 2000);
+            preRollBufferRef.current = preRollBufferRef.current.filter(
+              (chunk) => now - chunk.timestamp <= preRollLimit
+            );
+          }
         }
       };
 
@@ -410,15 +489,18 @@ export default function RecordPage() {
         processRecording();
       };
 
-      // IMPORTANT: Start recording immediately from the user gesture ("監視開始") so it works reliably
-      // across browsers. VAD still decides when to stop+send.
+      // IMPORTANT: Start MediaRecorder immediately from the user gesture ("監視開始") so it works reliably
+      // across browsers. But start in "listening" mode (pre-roll capture), not active recording.
+      // VAD will trigger actual recording when speech is detected.
       try {
         audioChunksRef.current = [];
+        preRollBufferRef.current = []; // Clear pre-roll buffer
         mediaRecorder.start(100);
-        isRecordingRef.current = true;
-        recordingStartRef.current = Date.now();
+        // Start in listening mode - pre-roll capture will begin
+        isRecordingRef.current = false;
+        recordingStartRef.current = null;
         silenceStartRef.current = null;
-        setListeningState('recording');
+        setListeningState('listening');
         setRecordingDuration(0);
       } catch (e: any) {
         const msg = e?.message ? String(e.message) : 'MediaRecorder.start() failed';
@@ -446,11 +528,27 @@ export default function RecordPage() {
       animationFrameRef.current = null;
     }
 
+    // Cancel any pending post-roll timeout
+    if (postRollTimeoutRef.current) {
+      clearTimeout(postRollTimeoutRef.current);
+      postRollTimeoutRef.current = null;
+    }
+
     // Stop media recorder
-    if (mediaRecorderRef.current && isRecordingRef.current) {
-      mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current) {
+      try {
+        if (mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.stop();
+        }
+      } catch {
+        // Ignore stop errors
+      }
       isRecordingRef.current = false;
     }
+
+    // Clear buffers
+    audioChunksRef.current = [];
+    preRollBufferRef.current = [];
 
     // Close audio context
     if (audioContextRef.current) {
@@ -594,7 +692,7 @@ export default function RecordPage() {
                   Zoom/現場の騒音を想定して、多少ノイズが入っても録音される方向に調整できます。
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={() => setVad({ ...VAD_PRESETS.zoom })}
                   disabled={listeningState !== 'idle'}
@@ -608,6 +706,13 @@ export default function RecordPage() {
                   className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 hover:bg-gray-100 disabled:opacity-50"
                 >
                   静かな環境
+                </button>
+                <button
+                  onClick={() => setVad({ ...VAD_PRESETS.sensitive })}
+                  disabled={listeningState !== 'idle'}
+                  className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 hover:bg-gray-100 disabled:opacity-50"
+                >
+                  高感度
                 </button>
               </div>
             </div>
@@ -665,6 +770,28 @@ export default function RecordPage() {
                 suffix="ms"
                 hint="無音になりにくい環境（Zoom/騒音）では短め（例：10-15秒）がおすすめ"
                 onChange={(v) => setVad((prev) => ({ ...prev, maxRecordingDurationMs: v }))}
+              />
+              <VadSlider
+                label="プリロール（話し始め前を含める）"
+                value={vad.preRollMs}
+                min={0}
+                max={2000}
+                step={100}
+                disabled={listeningState !== 'idle'}
+                suffix="ms"
+                hint="音声検知前の音声も含めて切れにくくする"
+                onChange={(v) => setVad((prev) => ({ ...prev, preRollMs: v }))}
+              />
+              <VadSlider
+                label="ポストロール（話し終わり後を含める）"
+                value={vad.postRollMs}
+                min={0}
+                max={1000}
+                step={50}
+                disabled={listeningState !== 'idle'}
+                suffix="ms"
+                hint="無音検知後も少し待って末尾を取りこぼさない"
+                onChange={(v) => setVad((prev) => ({ ...prev, postRollMs: v }))}
               />
             </div>
           </div>
@@ -842,16 +969,17 @@ export default function RecordPage() {
           <ol className="list-decimal list-inside space-y-1">
             <li>話者（発信元の本部）を選択</li>
             <li>「監視開始」をクリック</li>
-            <li>話し始めると自動で録音開始</li>
+            <li>話し始めると自動で録音開始（プリロールで話し始め前の音声も含む）</li>
             <li>
               無音が{Math.round(vad.silenceDurationMs / 100) / 10}秒続くか、
               最大{Math.round(vad.maxRecordingDurationMs / 1000)}秒で自動送信
             </li>
             <li>クロノロジーに自動登録されます</li>
           </ol>
-          <p className="mt-3 text-blue-600">
-            ※ 監視中は連続で会話を検知・処理します
-          </p>
+          <div className="mt-3 text-blue-600 space-y-1">
+            <p>※ 監視中は連続で会話を検知・処理します</p>
+            <p className="text-xs">※ 音声が切れる場合は「高感度」プリセットを試すか、プリロール/ポストロールを増やしてください</p>
+          </div>
         </div>
       </div>
     </div>
