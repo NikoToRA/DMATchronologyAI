@@ -27,6 +27,8 @@ def _parse_timestamp(timestamp_str: Optional[str]) -> Optional[datetime]:
     """
     Parse an ISO format timestamp string.
 
+    Supports JavaScript's toISOString() format with 'Z' timezone suffix.
+
     Args:
         timestamp_str: Optional ISO format timestamp string
 
@@ -36,7 +38,10 @@ def _parse_timestamp(timestamp_str: Optional[str]) -> Optional[datetime]:
     if not timestamp_str:
         return None
     try:
-        return datetime.fromisoformat(timestamp_str)
+        # JavaScript's toISOString() uses 'Z' suffix which fromisoformat
+        # doesn't support in Python < 3.11, so convert to +00:00
+        normalized = timestamp_str.replace('Z', '+00:00')
+        return datetime.fromisoformat(normalized)
     except ValueError:
         return None
 

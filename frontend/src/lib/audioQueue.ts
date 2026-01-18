@@ -204,6 +204,35 @@ export async function getPendingCount(sessionId?: string): Promise<number> {
 }
 
 /**
+ * Get a single segment by localId
+ */
+export async function getSegmentById(localId: string): Promise<PendingSegment | null> {
+  const database = await getDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.get(localId);
+
+    request.onsuccess = () => {
+      resolve(request.result || null);
+    };
+    request.onerror = () => reject(new Error('Failed to get segment'));
+  });
+}
+
+/**
+ * Retry uploading a specific segment by localId
+ */
+export async function retrySegment(localId: string): Promise<UploadResult> {
+  const segment = await getSegmentById(localId);
+  if (!segment) {
+    return { ok: false, error: 'Segment not found' };
+  }
+  return uploadSegment(segment);
+}
+
+/**
  * Clean up old segments (older than MAX_AGE_HOURS)
  */
 export async function cleanupOldSegments(): Promise<number> {

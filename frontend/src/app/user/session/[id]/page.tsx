@@ -2,35 +2,37 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import {
   ArrowLeft,
   Building2,
   Mic,
-  MicOff,
   Wifi,
   WifiOff,
   Check,
   AlertCircle,
   Loader2,
-  RefreshCw,
   Clock,
-  ChevronDown,
-  ChevronUp,
+  Settings,
+  Volume2,
+  LogOut,
 } from 'lucide-react';
-import { sessionsApi, chronologyApi, api, Session, ChronologyEntry } from '@/lib/api';
 import { useUserSession } from '@/contexts/UserSessionContext';
-import { createSessionWebSocket } from '@/lib/websocket';
+import { useChronology, useChronologyAutoScroll } from '@/hooks';
+import {
+  ChronologyFilters,
+  ChronologyEntryList,
+  ChronologyFooter,
+} from '@/components/chronology';
 import {
   addToQueue,
   uploadSegment,
-  getPendingSegments,
   getPendingCount,
   startQueueProcessor,
   stopQueueProcessor,
-  PendingSegment,
+  retrySegment,
 } from '@/lib/audioQueue';
 
 // =============================================================================
@@ -49,20 +51,6 @@ interface UploadHistoryItem {
 }
 
 // =============================================================================
-// Category Styles
-// =============================================================================
-
-const CATEGORY_STYLES: Record<string, string> = {
-  '指示': 'bg-red-100 text-red-800',
-  '依頼': 'bg-yellow-100 text-yellow-800',
-  '報告': 'bg-blue-100 text-blue-800',
-  '決定': 'bg-green-100 text-green-800',
-  '確認': 'bg-purple-100 text-purple-800',
-  'リスク': 'bg-orange-100 text-orange-800',
-  'その他': 'bg-gray-100 text-gray-800',
-};
-
-// =============================================================================
 // Main Component
 // =============================================================================
 
@@ -71,7 +59,7 @@ export default function UserSessionPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const sessionId = params.id as string;
-  const { session: userSession, isLoggedIn } = useUserSession();
+  const { session: userSession, isLoggedIn, logout } = useUserSession();
 
   // State
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
@@ -80,6 +68,10 @@ export default function UserSessionPage() {
   const [uploadHistory, setUploadHistory] = useState<UploadHistoryItem[]>([]);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [pendingCount, setPendingCount] = useState(0);
+  const [micGain, setMicGain] = useState(1.5);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   // Refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -87,6 +79,47 @@ export default function UserSessionPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const recordingStartRef = useRef<number | null>(null);
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+
+  // Chronology data using shared hook
+  const {
+    entries,
+    session: sessionData,
+    participants,
+    isEntriesLoading,
+    updateEntry,
+    filters,
+    setFilters,
+    refetch,
+    stats,
+  } = useChronology(sessionId);
+
+  const { scrollRef, autoScroll, setAutoScroll } = useChronologyAutoScroll(entries);
+
+  // Filter handlers
+  const handleCategoryChange = useCallback(
+    (category: typeof filters.category) => {
+      setFilters({ category });
+    },
+    [setFilters]
+  );
+
+  const handleHqChange = useCallback(
+    (hqId: string) => {
+      setFilters({ hqId });
+    },
+    [setFilters]
+  );
+
+  const handleUnconfirmedOnlyChange = useCallback(
+    (unconfirmedOnly: boolean) => {
+      setFilters({ unconfirmedOnly });
+    },
+    [setFilters]
+  );
 
   // Redirect if not logged in
   useEffect(() => {
@@ -128,41 +161,26 @@ export default function UserSessionPage() {
     };
   }, [sessionId]);
 
-  // Fetch session data
-  const { data: sessionData, isLoading: isLoadingSession } = useQuery({
-    queryKey: ['session', sessionId],
-    queryFn: () => sessionsApi.get(sessionId).then((res) => res.data),
-    enabled: !!sessionId,
-  });
-
-  // Fetch chronology entries
-  const { data: entries, isLoading: isLoadingEntries, refetch: refetchEntries } = useQuery({
-    queryKey: ['chronology', sessionId],
-    queryFn: () => chronologyApi.list(sessionId).then((res) => res.data),
-    enabled: !!sessionId,
-    refetchInterval: 5000, // Fallback polling
-  });
-
-  // WebSocket for real-time updates
-  useEffect(() => {
-    if (!sessionId) return;
-
-    const ws = createSessionWebSocket(sessionId);
-    ws.connect();
-
-    const unsubscribe = ws.on('new_entry', () => {
-      queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
-    });
-
-    return () => {
-      unsubscribe();
-      ws.disconnect();
-    };
-  }, [sessionId, queryClient]);
-
   // ==========================================================================
   // Recording Functions
   // ==========================================================================
+
+  const updateAudioLevel = useCallback(() => {
+    if (!analyserRef.current) return;
+
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(dataArray);
+
+    const sum = dataArray.reduce((a, b) => a + b, 0);
+    const avg = sum / dataArray.length;
+    const level = Math.min(100, Math.round((avg / 255) * 100 * 1.5));
+
+    setAudioLevel(level);
+
+    if (recordingState === 'recording') {
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+    }
+  }, [recordingState]);
 
   const startRecording = useCallback(async () => {
     if (recordingState !== 'idle') return;
@@ -175,15 +193,34 @@ export default function UserSessionPage() {
           sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: false,
         },
       });
       streamRef.current = stream;
+
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      audioContextRef.current = audioContext;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = micGain;
+      gainNodeRef.current = gainNode;
+
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
+
+      const dest = audioContext.createMediaStreamDestination();
+
+      source.connect(gainNode);
+      gainNode.connect(analyser);
+      analyser.connect(dest);
 
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      const mediaRecorder = new MediaRecorder(dest.stream, { mimeType });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -202,7 +239,8 @@ export default function UserSessionPage() {
       setRecordingState('recording');
       setRecordingDuration(0);
 
-      // Update duration every 100ms
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+
       recordingIntervalRef.current = setInterval(() => {
         if (recordingStartRef.current) {
           setRecordingDuration(
@@ -214,7 +252,7 @@ export default function UserSessionPage() {
       console.error('Failed to start recording:', err);
       setErrorMessage('マイクへのアクセスに失敗しました');
     }
-  }, [recordingState]);
+  }, [recordingState, micGain, updateAudioLevel]);
 
   const stopRecording = useCallback(() => {
     if (recordingState !== 'recording' || !mediaRecorderRef.current) return;
@@ -224,12 +262,24 @@ export default function UserSessionPage() {
       recordingIntervalRef.current = null;
     }
 
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
     mediaRecorderRef.current.stop();
 
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    setAudioLevel(0);
   }, [recordingState]);
 
   const processRecording = useCallback(async () => {
@@ -246,7 +296,6 @@ export default function UserSessionPage() {
       ? Math.floor((Date.now() - recordingStartRef.current) / 1000)
       : 0;
 
-    // Skip if too short (< 500ms)
     if (duration < 0.5) {
       setRecordingState('idle');
       return;
@@ -258,7 +307,6 @@ export default function UserSessionPage() {
     audioChunksRef.current = [];
 
     try {
-      // First, save to IndexedDB for offline support
       const segment = await addToQueue({
         sessionId,
         speakerName: userSession?.speakerName || '',
@@ -269,7 +317,6 @@ export default function UserSessionPage() {
         duration,
       });
 
-      // Add to upload history UI
       setUploadHistory((prev) => [
         {
           id: segment.localId,
@@ -281,11 +328,9 @@ export default function UserSessionPage() {
         ...prev.slice(0, 9),
       ]);
 
-      // Update pending count
       const count = await getPendingCount(sessionId);
       setPendingCount(count);
 
-      // If online, try to upload immediately
       if (navigator.onLine) {
         const result = await uploadSegment(segment);
 
@@ -306,7 +351,6 @@ export default function UserSessionPage() {
           );
         }
       } else {
-        // Offline - mark as pending
         setUploadHistory((prev) =>
           prev.map((item) =>
             item.id === segment.localId ? { ...item, status: 'pending' } : item
@@ -314,7 +358,6 @@ export default function UserSessionPage() {
         );
       }
 
-      // Update pending count after upload attempt
       const newCount = await getPendingCount(sessionId);
       setPendingCount(newCount);
     } catch (err: any) {
@@ -325,13 +368,66 @@ export default function UserSessionPage() {
     }
   }, [sessionId, userSession?.speakerName, userSession?.speakerId, queryClient]);
 
+  // Retry failed upload
+  const handleRetry = useCallback(
+    async (localId: string) => {
+      if (retryingId) return;
+
+      setRetryingId(localId);
+      setUploadHistory((prev) =>
+        prev.map((item) =>
+          item.id === localId ? { ...item, status: 'uploading' } : item
+        )
+      );
+
+      try {
+        const result = await retrySegment(localId);
+
+        if (result.ok) {
+          setUploadHistory((prev) =>
+            prev.map((item) =>
+              item.id === localId ? { ...item, status: 'success' } : item
+            )
+          );
+          queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
+        } else {
+          setUploadHistory((prev) =>
+            prev.map((item) =>
+              item.id === localId
+                ? { ...item, status: 'failed', errorMessage: result.error, retryCount: item.retryCount + 1 }
+                : item
+            )
+          );
+        }
+      } catch (err: any) {
+        setUploadHistory((prev) =>
+          prev.map((item) =>
+            item.id === localId
+              ? { ...item, status: 'failed', errorMessage: err.message }
+              : item
+          )
+        );
+      } finally {
+        setRetryingId(null);
+        const newCount = await getPendingCount(sessionId);
+        setPendingCount(newCount);
+      }
+    },
+    [retryingId, sessionId, queryClient]
+  );
+
+  // Logout handler
+  const handleLogout = useCallback(() => {
+    logout();
+    router.push('/user');
+  }, [logout, router]);
+
   // ==========================================================================
   // Keyboard Event Handlers
   // ==========================================================================
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if typing in input/textarea
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
@@ -435,6 +531,14 @@ export default function UserSessionPage() {
                   </>
                 )}
               </div>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+                title="ログアウト"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">ログアウト</span>
+              </button>
             </div>
           </div>
         </div>
@@ -477,10 +581,65 @@ export default function UserSessionPage() {
                 </span>
               )}
             </button>
-            <p className="text-xs text-gray-500">
-              Spaceキー長押し または ボタン長押しで録音
-            </p>
+
+            {/* Audio Level Meter */}
+            {recordingState === 'recording' && (
+              <div className="w-full max-w-md">
+                <div className="flex items-center gap-2">
+                  <Volume2 className="h-4 w-4 text-gray-400" />
+                  <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-75 ${
+                        audioLevel > 70 ? 'bg-red-500' : audioLevel > 40 ? 'bg-yellow-500' : 'bg-green-500'
+                      }`}
+                      style={{ width: `${audioLevel}%` }}
+                    />
+                  </div>
+                  <span className="text-xs text-gray-500 w-8">{audioLevel}%</span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-gray-500">
+                Spaceキー長押し または ボタン長押しで録音
+              </p>
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                title="マイク設定"
+              >
+                <Settings className="h-4 w-4 text-gray-400" />
+              </button>
+            </div>
           </div>
+
+          {/* Microphone Settings Panel */}
+          {showSettings && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg max-w-md mx-auto">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-gray-700">マイク感度</span>
+                <span className="text-sm text-gray-500">{micGain.toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                min="0.5"
+                max="3"
+                step="0.1"
+                value={micGain}
+                onChange={(e) => setMicGain(parseFloat(e.target.value))}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+              />
+              <div className="flex justify-between text-xs text-gray-400 mt-1">
+                <span>低</span>
+                <span>標準</span>
+                <span>高</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                音声が小さい場合は感度を上げてください
+              </p>
+            </div>
+          )}
 
           {/* Error Message */}
           {errorMessage && (
@@ -492,14 +651,12 @@ export default function UserSessionPage() {
 
           {/* Upload History + Pending Badge */}
           <div className="mt-4 flex items-center gap-2 justify-center flex-wrap">
-            {/* Pending Badge */}
             {pendingCount > 0 && (
               <div className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-orange-100 text-orange-700">
                 <Clock className="h-3 w-3" />
                 <span>未送信: {pendingCount}件</span>
               </div>
             )}
-            {/* History Items */}
             {uploadHistory.slice(0, 5).map((item) => (
               <div
                 key={item.id}
@@ -528,12 +685,11 @@ export default function UserSessionPage() {
                 </span>
                 {item.status === 'failed' && (
                   <button
-                    className="ml-1 underline"
-                    onClick={() => {
-                      // TODO: Implement retry
-                    }}
+                    className="ml-1 underline hover:no-underline"
+                    onClick={() => handleRetry(item.id)}
+                    disabled={retryingId === item.id}
                   >
-                    再送
+                    {retryingId === item.id ? '再送中...' : '再送'}
                   </button>
                 )}
               </div>
@@ -542,107 +698,35 @@ export default function UserSessionPage() {
         </div>
       </div>
 
-      {/* Chronology List */}
-      <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-4">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="font-semibold text-gray-900">クロノロジー</h2>
-          <button
-            onClick={() => refetchEntries()}
-            className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
-          >
-            <RefreshCw className="h-4 w-4" />
-            更新
-          </button>
+      {/* Filters - same as admin */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-4xl mx-auto">
+          <ChronologyFilters
+            filters={filters}
+            participants={participants}
+            onCategoryChange={handleCategoryChange}
+            onHqChange={handleHqChange}
+            onUnconfirmedOnlyChange={handleUnconfirmedOnlyChange}
+          />
         </div>
+      </div>
 
-        {isLoadingEntries ? (
-          <div className="text-center py-8 text-gray-500">読み込み中...</div>
-        ) : !entries || entries.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            まだ記録がありません
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {[...entries].reverse().map((entry) => (
-              <ChronologyCard key={entry.entry_id} entry={entry} />
-            ))}
-          </div>
-        )}
+      {/* Chronology List - same as admin */}
+      <main className="flex-1 max-w-4xl mx-auto w-full">
+        <ChronologyEntryList
+          entries={entries}
+          isLoading={isEntriesLoading}
+          scrollRef={scrollRef}
+          onUpdateEntry={updateEntry}
+          participants={participants}
+          sessionId={sessionId}
+        />
       </main>
-    </div>
-  );
-}
 
-// =============================================================================
-// Chronology Card Component
-// =============================================================================
-
-function ChronologyCard({ entry }: { entry: ChronologyEntry }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      <div className="flex items-start gap-3">
-        {/* Time */}
-        <div className="flex-shrink-0 text-xs text-gray-400 pt-0.5">
-          {format(new Date(entry.timestamp), 'HH:mm', { locale: ja })}
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 min-w-0">
-          {/* Header */}
-          <div className="flex items-center gap-2 mb-1">
-            <span
-              className={`px-2 py-0.5 rounded text-xs font-medium ${
-                CATEGORY_STYLES[entry.category] || CATEGORY_STYLES['その他']
-              }`}
-            >
-              {entry.category}
-            </span>
-            <span className="text-sm font-medium text-gray-700">
-              {entry.hq_name || '未確定'}
-            </span>
-            {entry.has_task && (
-              <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 text-xs rounded">
-                タスク
-              </span>
-            )}
-          </div>
-
-          {/* Summary */}
-          <div className="text-sm font-medium text-gray-900 mb-1">
-            {entry.summary}
-          </div>
-
-          {/* AI Note */}
-          {entry.ai_note && (
-            <div className="text-sm text-gray-600">{entry.ai_note}</div>
-          )}
-
-          {/* Expandable Raw Text */}
-          {entry.text_raw && (
-            <button
-              onClick={() => setIsExpanded(!isExpanded)}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 mt-2"
-            >
-              {isExpanded ? (
-                <>
-                  <ChevronUp className="h-3 w-3" />
-                  文字起こしを隠す
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-3 w-3" />
-                  文字起こしを表示
-                </>
-              )}
-            </button>
-          )}
-          {isExpanded && entry.text_raw && (
-            <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-500">
-              {entry.text_raw}
-            </div>
-          )}
+      {/* Footer Stats - same as admin */}
+      <div className="bg-white border-t border-gray-200">
+        <div className="max-w-4xl mx-auto">
+          <ChronologyFooter stats={stats} />
         </div>
       </div>
     </div>

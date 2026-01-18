@@ -23,10 +23,21 @@ interface ProcessedEntry {
   timestamp: string;
 }
 
+// Voice Activity Detection settings type
+interface VadSettings {
+  speechThresholdDb: number;
+  silenceThresholdDb: number;
+  silenceDurationMs: number;
+  minRecordingDurationMs: number;
+  maxRecordingDurationMs: number;
+  preRollMs: number;
+  postRollMs: number;
+}
+
 // Voice Activity Detection defaults
 // NOTE: If "silence" sits around -50dB (noisy room / AGC), using -60/-75 will never stop.
 // These defaults aim to work in that environment out-of-the-box.
-const DEFAULT_VAD = {
+const DEFAULT_VAD: VadSettings = {
   speechThresholdDb: -45,        // start when clearly above noise floor (lowered for better sensitivity)
   silenceThresholdDb: -50,       // treat around/below noise floor as "silence" to allow stopping
   silenceDurationMs: 2000,       // stop after this much "silence" (increased to avoid cutting off speech)
@@ -34,10 +45,10 @@ const DEFAULT_VAD = {
   maxRecordingDurationMs: 15000, // force-send chunk (increased to allow longer utterances)
   preRollMs: 500,                // pre-roll buffer to capture speech before detection
   postRollMs: 300,               // post-roll tail to capture trailing speech
-} as const;
+};
 
 type VadPreset = 'zoom' | 'quiet' | 'sensitive';
-const VAD_PRESETS: Record<VadPreset, typeof DEFAULT_VAD> = {
+const VAD_PRESETS: Record<VadPreset, VadSettings> = {
   zoom: DEFAULT_VAD,
   quiet: {
     speechThresholdDb: -55,
@@ -57,7 +68,7 @@ const VAD_PRESETS: Record<VadPreset, typeof DEFAULT_VAD> = {
     preRollMs: 800,
     postRollMs: 500,
   },
-} as const;
+};
 
 export default function RecordPage() {
   const params = useParams();

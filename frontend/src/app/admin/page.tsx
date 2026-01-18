@@ -2,16 +2,13 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Clock } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import { chronologyApi, participantsApi, sessionsApi, incidentsApi, type Incident, type Session } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { LoadingPlaceholder, EmptyState } from '@/components/ui/LoadingState';
-import { CreateSessionModal } from '@/components/sessions';
-import type { CreateSessionFormData } from '@/lib/types';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function SessionsPage() {
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isCreatingDemo, setIsCreatingDemo] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
   const router = useRouter();
@@ -29,7 +26,7 @@ export default function SessionsPage() {
     if (!incidents || incidents.length === 0) return;
     const active = incidents.find((i) => i.status === 'active');
     const fallback = active ?? incidents[0];
-    router.replace(`/?incident=${fallback.incident_id}`);
+    router.replace(`/admin?incident=${fallback.incident_id}`);
   }, [incidents, selectedIncidentId]);
 
   const selectedIncident: Incident | undefined = useMemo(() => {
@@ -51,29 +48,6 @@ export default function SessionsPage() {
     });
     return allSessions.filter((s) => ids.has(s.session_id));
   }, [allSessions, selectedIncident]);
-
-  // Handlers
-  const handleOpenCreateModal = useCallback(() => {
-    setIsCreateModalOpen(true);
-  }, []);
-
-  const handleCloseCreateModal = useCallback(() => {
-    setIsCreateModalOpen(false);
-  }, []);
-
-  const handleCreateSession = useCallback(
-    (data: CreateSessionFormData) => {
-      // Keep legacy single-session creation available
-      sessionsApi.create({
-        session_kind: data.session_kind as any,
-        incident_name: data.incident_name,
-        zoom_meeting_id: data.zoom_meeting_id,
-      }).then(() => {
-        setIsCreateModalOpen(false);
-      });
-    },
-    []
-  );
 
   const handleCreateDemo = useCallback(async () => {
     if (isCreatingDemo) return;
@@ -98,8 +72,11 @@ export default function SessionsPage() {
         participantsApi.create(sessionId, { zoom_display_name: '札幌徳洲会病院支援指揮所' }),
         participantsApi.create(sessionId, { zoom_display_name: '札幌東徳洲会病院支援指揮所' }),
       ]);
-      const participantId =
-        participants.find((p) => p.status === 'fulfilled')?.value.data.participant_id ?? undefined;
+      const fulfilledParticipant = participants.find(
+        (p): p is PromiseFulfilledResult<Awaited<ReturnType<typeof participantsApi.create>>> =>
+          p.status === 'fulfilled'
+      );
+      const participantId = fulfilledParticipant?.value.data.participant_id ?? undefined;
 
       // 3) Create a few demo chronology entries (best-effort; may fail if AI not configured)
       await Promise.allSettled([
@@ -158,6 +135,10 @@ export default function SessionsPage() {
       queryClient.invalidateQueries({ queryKey: ['incidents'] });
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
     },
+    onError: (error: Error) => {
+      console.error('単発セッション作成エラー:', error);
+      alert(`単発セッションの作成に失敗しました: ${error.message}`);
+    },
   });
 
   const deleteIncidentMutation = useMutation({
@@ -165,7 +146,7 @@ export default function SessionsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['incidents'] });
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      router.replace('/');
+      router.replace('/admin');
     },
   });
 
@@ -190,14 +171,9 @@ export default function SessionsPage() {
           <h1 className="text-2xl font-bold text-gray-900">セッション一覧</h1>
           <p className="text-sm text-gray-500">左のサイドバーから災害ボックスを選択してください</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={handleCreateDemo} disabled={isCreatingDemo}>
-            {isCreatingDemo ? 'デモ作成中...' : 'デモを作成'}
-          </Button>
-          <Button icon={Plus} onClick={handleOpenCreateModal}>
-            単発セッション
-          </Button>
-        </div>
+        <Button variant="secondary" onClick={handleCreateDemo} disabled={isCreatingDemo}>
+          {isCreatingDemo ? 'デモ作成中...' : 'デモを作成'}
+        </Button>
       </div>
 
       {demoError && (
@@ -282,12 +258,10 @@ export default function SessionsPage() {
               <Button
                 variant="secondary"
                 onClick={() => {
-                  const roomName = window.prompt('追加するZoomルーム名（例：医療連携、広報、現地連絡）');
+                  const roomName = window.prompt('追加するセッション名（例：医療連携、広報、現地連絡）');
                   if (!roomName || !roomName.trim()) return;
-                  const zoom = window.prompt('ZoomミーティングID（任意）');
                   createExtraSessionMutation.mutate({
                     label: roomName.trim(),
-                    zoom_meeting_id: zoom?.trim() || undefined,
                   });
                 }}
                 disabled={createExtraSessionMutation.isPending}
@@ -307,15 +281,19 @@ export default function SessionsPage() {
           </div>
         </div>
       )}
-
-      <CreateSessionModal
-        isOpen={isCreateModalOpen}
-        onClose={handleCloseCreateModal}
-        onCreate={handleCreateSession}
-        isLoading={false}
-      />
     </div>
   );
+}
+
+function getSessionKindLabel(kind?: string): string {
+  const labels: Record<string, string> = {
+    activity_command: '活動指揮',
+    transport_coordination: '搬送調整',
+    info_analysis: '情報分析',
+    logistics_support: '物資支援',
+    extra: '追加',
+  };
+  return labels[kind ?? ''] ?? kind ?? '';
 }
 
 function IncidentSessionsPanel({
@@ -337,7 +315,7 @@ function IncidentSessionsPanel({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {departmentSessions.map((s) => (
               <div key={s.session_id} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <div className="text-sm text-gray-500">{s.session_kind_label}</div>
+                <div className="text-sm text-gray-500">{getSessionKindLabel(s.session_kind)}</div>
                 <div className="text-lg font-semibold text-gray-900 mt-0.5">{s.title}</div>
                 <div className="mt-3 flex items-center gap-2">
                   <Button onClick={() => router.push(`/sessions/${s.session_id}/chronology`)}>クロノロジー</Button>
@@ -359,7 +337,7 @@ function IncidentSessionsPanel({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {extraSessions.map((s) => (
               <div key={s.session_id} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                <div className="text-sm text-gray-500">{s.session_kind_label}</div>
+                <div className="text-sm text-gray-500">{getSessionKindLabel(s.session_kind)}</div>
                 <div className="text-lg font-semibold text-gray-900 mt-0.5">{s.title}</div>
                 <div className="mt-3 flex items-center gap-2">
                   <Button onClick={() => router.push(`/sessions/${s.session_id}/chronology`)}>クロノロジー</Button>

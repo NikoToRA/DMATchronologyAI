@@ -48,7 +48,7 @@ export default function EntryPage() {
 
           {/* Admin Entry */}
           <button
-            onClick={() => router.push('/admin')}
+            onClick={() => router.push('/admin/login')}
             className="group p-8 rounded-2xl border-2 border-gray-200 bg-white hover:border-gray-400 hover:shadow-lg transition-all text-left"
           >
             <div className="flex items-center justify-between mb-4">

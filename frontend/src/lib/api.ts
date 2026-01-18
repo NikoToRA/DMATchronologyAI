@@ -248,7 +248,9 @@ api.interceptors.request.use(
 
 // Response interceptor for error handling
 api.interceptors.response.use(
-  (response: AxiosResponse) => response,
+  (response: AxiosResponse) => {
+    return response;
+  },
   (error: AxiosError<ApiErrorResponse>) => {
     const apiError = ApiError.fromAxiosError(error);
 
@@ -325,12 +327,12 @@ export const chronologyApi = {
 
   /**
    * Create a manual chronology entry.
-   * NOTE: backend expects query params (FastAPI function args), not JSON body.
+   * NOTE: backend expects JSON body (ChronologyCreate), not query params.
    */
   create: (
     sessionId: string,
-    params: { text_raw: string; participant_id?: string; timestamp?: string }
-  ) => api.post<ChronologyEntry>(`/api/sessions/${sessionId}/chronology`, null, { params }),
+    data: { text_raw: string; participant_id?: string; timestamp?: string }
+  ) => api.post<ChronologyEntry>(`/api/sessions/${sessionId}/chronology`, data),
 
   /** Update a chronology entry */
   update: (sessionId: string, entryId: string, data: UpdateChronologyPayload) =>

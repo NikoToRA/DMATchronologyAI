@@ -335,8 +335,16 @@ class ZoomBotService:
             This method is designed to be called at 10-20 second intervals.
             Silent segments are filtered out early to avoid unnecessary processing.
         """
+        # Track whether we're using client timestamp or server-generated
+        timestamp_source = "client"
         if timestamp is None:
             timestamp = datetime.utcnow()
+            timestamp_source = "server"
+            logger.warning(
+                f"No client timestamp provided for audio chunk, using server time. "
+                f"This may cause chronology entries to have incorrect timestamps "
+                f"if audio was recorded offline and uploaded later."
+            )
 
         def _is_wav(data: bytes) -> bool:
             return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WAVE"
@@ -348,6 +356,7 @@ class ZoomBotService:
             "participant_id": participant_id,
             "audio_format": audio_format,
             "timestamp": timestamp.isoformat(),
+            "timestamp_source": timestamp_source,  # "client" or "server"
         }
         # Helpful debug flags for callers (frontend)
         try:

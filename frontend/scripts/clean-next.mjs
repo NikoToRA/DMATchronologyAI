@@ -8,7 +8,8 @@ import path from 'node:path';
  *   Error: Cannot find module './72.js' (expected under .next/server/)
  */
 const projectRoot = process.cwd();
-const nextDir = path.join(projectRoot, '.next');
+const distDirName = process.env.NEXT_DIST_DIR || '.next';
+const nextDir = path.join(projectRoot, distDirName);
 
 try {
   if (fs.existsSync(nextDir)) {

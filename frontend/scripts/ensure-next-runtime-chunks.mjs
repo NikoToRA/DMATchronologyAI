@@ -16,7 +16,8 @@ import path from 'node:path';
  */
 
 const projectRoot = process.cwd();
-const chunksDir = path.join(projectRoot, '.next', 'static', 'chunks');
+const distDirName = process.env.NEXT_DIST_DIR || '.next';
+const chunksDir = path.join(projectRoot, distDirName, 'static', 'chunks');
 
 function exists(p) {
   try {

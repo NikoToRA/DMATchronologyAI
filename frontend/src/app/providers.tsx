@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
 import { UserSessionProvider } from '@/contexts/UserSessionContext';
+import { AdminSessionProvider } from '@/contexts/AdminSessionContext';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -19,7 +20,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <UserSessionProvider>{children}</UserSessionProvider>
+      <AdminSessionProvider>
+        <UserSessionProvider>{children}</UserSessionProvider>
+      </AdminSessionProvider>
     </QueryClientProvider>
   );
 }

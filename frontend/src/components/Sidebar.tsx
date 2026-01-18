@@ -13,9 +13,11 @@ import {
   FolderDot,
   Plus,
   ChevronRight,
+  LogOut,
   type LucideIcon,
 } from 'lucide-react';
 import { incidentsApi, type Incident } from '@/lib/api';
+import { useAdminSession } from '@/contexts/AdminSessionContext';
 
 // Navigation item type
 interface NavigationItem {
@@ -26,7 +28,7 @@ interface NavigationItem {
 
 // Navigation configuration
 const NAVIGATION_ITEMS: readonly NavigationItem[] = [
-  { name: 'セッション一覧', href: '/', icon: LayoutDashboard },
+  { name: 'セッション一覧', href: '/admin', icon: LayoutDashboard },
   { name: '設定', href: '/settings', icon: Settings },
 ] as const;
 
@@ -89,7 +91,7 @@ function IncidentNavigation({ selectedIncidentId }: { selectedIncidentId: string
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['incidents'] });
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
-      router.push(`/?incident=${created.incident_id}`);
+      router.push(`/admin?incident=${created.incident_id}`);
     },
   });
 
@@ -179,7 +181,7 @@ function IncidentGroup({
           return (
             <Link
               key={inc.incident_id}
-              href={`/?incident=${inc.incident_id}`}
+              href={`/admin?incident=${inc.incident_id}`}
               className={`group flex items-center justify-between rounded-lg px-2 py-2 text-sm transition-colors ${
                 isSelected ? 'bg-primary-50 text-primary-700' : 'text-gray-700 hover:bg-gray-100'
               }`}
@@ -211,8 +213,8 @@ interface NavItemProps {
 
 function NavItem({ item, pathname }: NavItemProps) {
   const isActive = useMemo(() => {
-    if (item.href === '/') {
-      return pathname === '/';
+    if (item.href === '/admin') {
+      return pathname === '/admin';
     }
     return pathname.startsWith(item.href);
   }, [item.href, pathname]);
@@ -237,8 +239,23 @@ function NavItem({ item, pathname }: NavItemProps) {
 
 // Footer section
 function Footer() {
+  const router = useRouter();
+  const { adminLogout } = useAdminSession();
+
+  const handleLogout = useCallback(() => {
+    adminLogout();
+    router.push('/');
+  }, [adminLogout, router]);
+
   return (
-    <div className="p-4 border-t border-gray-200">
+    <div className="p-4 border-t border-gray-200 space-y-3">
+      <button
+        onClick={handleLogout}
+        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+      >
+        <LogOut className="h-4 w-4" />
+        ログアウト
+      </button>
       <div className="flex items-center gap-2 text-xs text-gray-500">
         <AlertCircle className="h-4 w-4" />
         <span>Phase 1 MVP</span>
