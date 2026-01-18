@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clock } from 'lucide-react';
-import { chronologyApi, participantsApi, sessionsApi, incidentsApi, type Incident, type Session } from '@/lib/api';
+import { Clock, Building2, Trash2, Plus } from 'lucide-react';
+import { chronologyApi, participantsApi, sessionsApi, incidentsApi, sessionHqApi, type Incident, type Session, type HQMaster } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { LoadingPlaceholder, EmptyState } from '@/components/ui/LoadingState';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -164,6 +164,59 @@ export default function SessionsPage() {
     return required.filter((k) => !selectedIncident.sessions?.[k]);
   }, [selectedIncident]);
 
+  // Get primary session ID for HQ management
+  const primarySessionId = useMemo(() => {
+    if (!selectedIncident) return null;
+    return (
+      selectedIncident.sessions.activity_command ||
+      selectedIncident.sessions.transport_coordination ||
+      selectedIncident.sessions.info_analysis ||
+      selectedIncident.sessions.logistics_support ||
+      null
+    );
+  }, [selectedIncident]);
+
+  // Fetch HQ list for the incident
+  const { data: hqList, isLoading: isHqLoading } = useQuery({
+    queryKey: ['session-hq', primarySessionId],
+    queryFn: () => sessionHqApi.list(primarySessionId!).then((r) => r.data),
+    enabled: !!primarySessionId,
+  });
+
+  // HQ mutations
+  const createHqMutation = useMutation({
+    mutationFn: (data: { hq_name: string; zoom_pattern: string }) => {
+      console.log('Creating HQ with sessionId:', primarySessionId, 'data:', data);
+      return sessionHqApi.create(primarySessionId!, data).then((r) => r.data);
+    },
+    onSuccess: (data) => {
+      console.log('HQ created successfully:', data);
+      queryClient.invalidateQueries({ queryKey: ['session-hq', primarySessionId] });
+    },
+    onError: (error: Error) => {
+      console.error('HQ creation error:', error);
+      alert(`本部の追加に失敗しました: ${error.message}`);
+    },
+  });
+
+  const deleteHqMutation = useMutation({
+    mutationFn: (hqId: string) => sessionHqApi.delete(primarySessionId!, hqId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['session-hq', primarySessionId] });
+    },
+    onError: (error: Error) => {
+      alert(`本部の削除に失敗しました: ${error.message}`);
+    },
+  });
+
+  const toggleHqActiveMutation = useMutation({
+    mutationFn: ({ hqId, active }: { hqId: string; active: boolean }) =>
+      sessionHqApi.update(primarySessionId!, hqId, { active }).then((r) => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['session-hq', primarySessionId] });
+    },
+  });
+
   return (
     <div className="p-6">
       <div className="mb-4 flex items-center justify-between">
@@ -277,6 +330,82 @@ export default function SessionsPage() {
                 departmentSessions={departmentSessions}
                 extraSessions={extraSessions}
               />
+            )}
+          </div>
+
+          {/* 本部管理セクション */}
+          <div className="bg-white rounded-lg shadow p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <div className="text-sm text-gray-500">本部管理</div>
+                <div className="text-lg font-semibold text-gray-900">ユーザーが選択できる本部一覧</div>
+              </div>
+              <Button
+                variant="secondary"
+                icon={Plus}
+                onClick={() => {
+                  const hqName = window.prompt('本部名を入力（例：北海道調整本部、札幌DMAT）');
+                  if (!hqName || !hqName.trim()) return;
+                  createHqMutation.mutate({
+                    hq_name: hqName.trim(),
+                    zoom_pattern: hqName.trim(),
+                  });
+                }}
+                disabled={createHqMutation.isPending || !primarySessionId}
+              >
+                {createHqMutation.isPending ? '追加中...' : '本部を追加'}
+              </Button>
+            </div>
+
+            {!primarySessionId ? (
+              <div className="text-sm text-gray-500">セッションがありません。先に4部署を作成してください。</div>
+            ) : isHqLoading ? (
+              <LoadingPlaceholder />
+            ) : !hqList || hqList.length === 0 ? (
+              <div className="text-sm text-gray-500 py-4 text-center bg-gray-50 rounded-lg">
+                登録された本部がありません
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {hqList.map((hq) => (
+                  <div
+                    key={hq.hq_id}
+                    className={`flex items-center justify-between p-3 rounded-lg border ${
+                      hq.active ? 'border-gray-200 bg-gray-50' : 'border-gray-100 bg-gray-100 opacity-60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Building2 className="h-5 w-5 text-gray-500" />
+                      <div>
+                        <div className="font-medium text-gray-900">{hq.hq_name}</div>
+                        {!hq.active && <div className="text-xs text-gray-500">無効</div>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggleHqActiveMutation.mutate({ hqId: hq.hq_id, active: !hq.active })}
+                        className={`px-3 py-1 text-sm rounded ${
+                          hq.active
+                            ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                            : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                        }`}
+                      >
+                        {hq.active ? '無効化' : '有効化'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`「${hq.hq_name}」を削除しますか？`)) {
+                            deleteHqMutation.mutate(hq.hq_id);
+                          }
+                        }}
+                        className="p-1.5 text-red-500 hover:bg-red-50 rounded"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
