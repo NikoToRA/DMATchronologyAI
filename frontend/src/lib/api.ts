@@ -359,6 +359,10 @@ export const chronologyApi = {
   /** Update a chronology entry */
   update: (sessionId: string, entryId: string, data: UpdateChronologyPayload) =>
     api.patch<ChronologyEntry>(`/api/sessions/${sessionId}/chronology/${entryId}`, data),
+
+  /** Delete a chronology entry */
+  delete: (sessionId: string, entryId: string) =>
+    api.delete<void>(`/api/sessions/${sessionId}/chronology/${entryId}`),
 } as const;
 
 /**

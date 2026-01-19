@@ -20,7 +20,7 @@ import {
   addToQueue,
   uploadSegment,
 } from '@/lib/audioQueue';
-import { api, Participant } from '@/lib/api';
+import { api, Participant, chronologyApi } from '@/lib/api';
 
 // =============================================================================
 // Types
@@ -35,9 +35,6 @@ interface BusshiSession {
   hqId: string;
   incidentName: string;
 }
-
-// 無音判定の閾値（録音中の最大音量がこれ以下なら破棄）
-const SILENCE_THRESHOLD = 5;
 
 // =============================================================================
 // Main Component
@@ -67,6 +64,9 @@ export default function BusshiSessionPage() {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [isOnline, setIsOnline] = useState(true);
   const [sendingCount, setSendingCount] = useState(0); // 送信中の件数
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  const [sendingPhase, setSendingPhase] = useState<'stt' | 'ai' | null>(null);
+  const sendingPhaseTimeoutRef = useRef<number | null>(null);
 
   // Refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -76,9 +76,7 @@ export default function BusshiSessionPage() {
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const maxAudioLevelRef = useRef<number>(0); // 録音中の最大音量を記録
 
   // Chronology data using shared hook
   const {
@@ -86,10 +84,25 @@ export default function BusshiSessionPage() {
     participants,
     isEntriesLoading,
     updateEntry,
+    refetch,
     stats,
   } = useChronology(sessionId);
 
   const { scrollRef } = useChronologyAutoScroll(entries);
+
+  // Delete entry handler
+  const handleDeleteEntry = useCallback(
+    async (entryId: string) => {
+      try {
+        await chronologyApi.delete(sessionId, entryId);
+        queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
+      } catch (err: any) {
+        console.error('Failed to delete entry:', err);
+        setErrorMessage('削除に失敗しました');
+      }
+    },
+    [sessionId, queryClient]
+  );
 
   // Register participant in this session if not already registered
   useEffect(() => {
@@ -138,36 +151,170 @@ export default function BusshiSessionPage() {
     };
   }, []);
 
+  // Sending progress UX (approximate): STT -> AI
+  useEffect(() => {
+    // Clear any previous timer
+    if (sendingPhaseTimeoutRef.current) {
+      window.clearTimeout(sendingPhaseTimeoutRef.current);
+      sendingPhaseTimeoutRef.current = null;
+    }
+
+    if (sendingCount <= 0) {
+      setSendingPhase(null);
+      return;
+    }
+
+    // Immediately show "speech recognition" phase, then transition to "AI analysis"
+    setSendingPhase('stt');
+    sendingPhaseTimeoutRef.current = window.setTimeout(() => {
+      setSendingPhase('ai');
+      sendingPhaseTimeoutRef.current = null;
+    }, 1200);
+
+    return () => {
+      if (sendingPhaseTimeoutRef.current) {
+        window.clearTimeout(sendingPhaseTimeoutRef.current);
+        sendingPhaseTimeoutRef.current = null;
+      }
+    };
+  }, [sendingCount]);
+
   // ==========================================================================
   // Recording Functions
   // ==========================================================================
 
+  const cleanupRecordingResources = useCallback(() => {
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
+
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    mediaRecorderRef.current = null;
+    analyserRef.current = null;
+    audioChunksRef.current = [];
+    recordingStartRef.current = null;
+    setRecordingDuration(0);
+  }, []);
+
+  // Keep analyser active while recording (for browser audio graph stability)
   const updateAudioLevel = useCallback(() => {
     if (!analyserRef.current) return;
-
-    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-    analyserRef.current.getByteFrequencyData(dataArray);
-
-    const sum = dataArray.reduce((a, b) => a + b, 0);
-    const avg = sum / dataArray.length;
-    const level = Math.min(100, Math.round((avg / 255) * 100 * 1.5));
-
-    // 最大音量を更新
-    if (level > maxAudioLevelRef.current) {
-      maxAudioLevelRef.current = level;
-    }
-
-    if (recordingState === 'recording') {
-      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
-    }
+    if (recordingState !== 'recording') return;
+    animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
   }, [recordingState]);
+
+  const uploadWithRetry = useCallback(
+    async (segment: any) => {
+      const maxRetries = 10;
+      const retryDelay = 3000;
+
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        while (!navigator.onLine) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+
+        try {
+          const result = await uploadSegment(segment);
+          if (result.ok) {
+            queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
+            return true;
+          }
+          // show backend stage/error in UI (helps debug)
+          setErrorMessage(result.error || '音声の処理に失敗しました');
+        } catch (err: any) {
+          setErrorMessage(err?.message || '音声の送信に失敗しました');
+        }
+
+        if (attempt < maxRetries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        }
+      }
+      return false;
+    },
+    [queryClient, sessionId]
+  );
+
+  const processRecording = useCallback(
+    async (recordedMimeType: string | undefined) => {
+      if (audioChunksRef.current.length === 0) {
+        setRecordingState('idle');
+        cleanupRecordingResources();
+        return;
+      }
+
+      const duration = recordingStartRef.current
+        ? (Date.now() - recordingStartRef.current) / 1000
+        : 0;
+
+      // too short -> discard
+      if (duration < 0.5) {
+        setRecordingState('idle');
+        cleanupRecordingResources();
+        return;
+      }
+
+      const startTime = recordingStartRef.current
+        ? new Date(recordingStartRef.current).toISOString()
+        : new Date().toISOString();
+      const endTime = new Date().toISOString();
+
+      setRecordingState('sending');
+      setSendingCount((prev) => prev + 1);
+
+      const mime = recordedMimeType || 'audio/webm';
+      const audioBlob = new Blob(audioChunksRef.current, { type: mime });
+      audioChunksRef.current = [];
+
+      try {
+        const segment = await addToQueue({
+          sessionId,
+          speakerName: busshiSession?.speakerName || '',
+          speakerId: busshiSession?.speakerId || '',
+          audioBlob,
+          startTime,
+          endTime,
+          duration,
+        });
+
+        // allow next recording immediately
+        setRecordingState('idle');
+
+        // upload in background
+        uploadWithRetry(segment).finally(() => {
+          setSendingCount((prev) => Math.max(0, prev - 1));
+        });
+      } catch (err: any) {
+        console.error('Failed to process recording:', err);
+        setErrorMessage(err?.message || '録音の処理に失敗しました');
+        setRecordingState('idle');
+        setSendingCount((prev) => Math.max(0, prev - 1));
+      } finally {
+        cleanupRecordingResources();
+      }
+    },
+    [busshiSession?.speakerId, busshiSession?.speakerName, cleanupRecordingResources, sessionId, uploadWithRetry]
+  );
 
   const startRecording = useCallback(async () => {
     if (recordingState !== 'idle') return;
 
     try {
-      // 最大音量をリセット
-      maxAudioLevelRef.current = 0;
+      setErrorMessage('');
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -180,29 +327,21 @@ export default function BusshiSessionPage() {
       });
       streamRef.current = stream;
 
-      const audioContext = new AudioContext({ sampleRate: 16000 });
+      const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
 
       const source = audioContext.createMediaStreamSource(stream);
-      const gainNode = audioContext.createGain();
-      gainNode.gain.value = 3.0; // MAX固定
-      gainNodeRef.current = gainNode;
-
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       analyserRef.current = analyser;
+      source.connect(analyser);
 
-      const dest = audioContext.createMediaStreamDestination();
+      const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      const chosenMime =
+        candidates.find((t) => (typeof MediaRecorder !== 'undefined' ? MediaRecorder.isTypeSupported?.(t) : false)) ??
+        '';
 
-      source.connect(gainNode);
-      gainNode.connect(analyser);
-      analyser.connect(dest);
-
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-
-      const mediaRecorder = new MediaRecorder(dest.stream, { mimeType });
+      const mediaRecorder = new MediaRecorder(stream, chosenMime ? { mimeType: chosenMime } : undefined);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -212,8 +351,15 @@ export default function BusshiSessionPage() {
         }
       };
 
+      mediaRecorder.onerror = (evt: any) => {
+        const msg = evt?.error?.message ? String(evt.error.message) : 'MediaRecorder error';
+        setErrorMessage(`MediaRecorderエラー: ${msg}`);
+        setRecordingState('idle');
+        cleanupRecordingResources();
+      };
+
       mediaRecorder.onstop = () => {
-        processRecording();
+        processRecording(mediaRecorder.mimeType);
       };
 
       mediaRecorder.start(100);
@@ -232,8 +378,11 @@ export default function BusshiSessionPage() {
       }, 100);
     } catch (err) {
       console.error('Failed to start recording:', err);
+      setErrorMessage('マイクへのアクセスに失敗しました');
+      setRecordingState('idle');
+      cleanupRecordingResources();
     }
-  }, [recordingState, updateAudioLevel]);
+  }, [cleanupRecordingResources, processRecording, recordingState, updateAudioLevel]);
 
   const stopRecording = useCallback(() => {
     if (recordingState !== 'recording' || !mediaRecorderRef.current) return;
@@ -248,114 +397,46 @@ export default function BusshiSessionPage() {
       animationFrameRef.current = null;
     }
 
-    mediaRecorderRef.current.stop();
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-  }, [recordingState]);
-
-  // バックグラウンドで自動リトライ付きアップロード
-  const uploadWithRetry = useCallback(async (segment: any) => {
-    const maxRetries = 10;
-    const retryDelay = 3000;
-
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      // オンラインになるまで待つ
-      while (!navigator.onLine) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-
-      try {
-        const result = await uploadSegment(segment);
-        if (result.ok) {
-          queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
-          return true;
-        }
-        // 認識結果が空の場合は成功として扱う（無音だった）
-        if (result.error?.includes('認識') || result.error?.includes('empty')) {
-          return true;
-        }
-      } catch (err) {
-        console.error(`Upload attempt ${attempt + 1} failed:`, err);
-      }
-
-      // リトライ前に待機
-      if (attempt < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-      }
-    }
-    return false;
-  }, [queryClient, sessionId]);
-
-  const processRecording = useCallback(async () => {
-    if (audioChunksRef.current.length === 0) {
-      setRecordingState('idle');
-      return;
-    }
-
-    const duration = recordingStartRef.current
-      ? Math.floor((Date.now() - recordingStartRef.current) / 1000)
-      : 0;
-
-    // 短すぎる録音は破棄
-    if (duration < 0.5) {
-      setRecordingState('idle');
-      return;
-    }
-
-    // 無音判定: 録音中の最大音量が閾値以下なら破棄
-    if (maxAudioLevelRef.current < SILENCE_THRESHOLD) {
-      console.log('Silent recording discarded, max level:', maxAudioLevelRef.current);
+    const durationMs = recordingStartRef.current ? Date.now() - recordingStartRef.current : 0;
+    if (durationMs < 500) {
+      // Too short -> discard
       audioChunksRef.current = [];
       setRecordingState('idle');
+      cleanupRecordingResources();
       return;
     }
 
-    const startTime = recordingStartRef.current
-      ? new Date(recordingStartRef.current).toISOString()
-      : new Date().toISOString();
-    const endTime = new Date().toISOString();
-
-    // 送信中表示
-    setRecordingState('sending');
-    setSendingCount(prev => prev + 1);
-
-    const recordedMimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
-    const audioBlob = new Blob(audioChunksRef.current, { type: recordedMimeType });
-    audioChunksRef.current = [];
+    try {
+      if (mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.requestData();
+      }
+    } catch {
+      // ignore
+    }
 
     try {
-      const segment = await addToQueue({
-        sessionId,
-        speakerName: busshiSession?.speakerName || '',
-        speakerId: busshiSession?.speakerId || '',
-        audioBlob,
-        startTime,
-        endTime,
-        duration,
-      });
-
-      // すぐにidleに戻して次の録音を受け付け可能に
+      mediaRecorderRef.current.stop();
+    } catch (e: any) {
+      const msg = e?.message ? String(e.message) : 'MediaRecorder.stop() failed';
+      setErrorMessage(`録音停止に失敗しました: ${msg}`);
       setRecordingState('idle');
-
-      // バックグラウンドでアップロード（自動リトライ付き）
-      uploadWithRetry(segment).finally(() => {
-        setSendingCount(prev => Math.max(0, prev - 1));
-      });
-
-    } catch (err: any) {
-      console.error('Failed to process recording:', err);
-      setRecordingState('idle');
-      setSendingCount(prev => Math.max(0, prev - 1));
+      cleanupRecordingResources();
     }
-  }, [sessionId, busshiSession?.speakerName, busshiSession?.speakerId, uploadWithRetry]);
+  }, [recordingState]);
+  // Stop mic if user leaves / reloads while recording.
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && recordingState === 'recording') {
+        try {
+          stopRecording();
+        } catch {
+          cleanupRecordingResources();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [cleanupRecordingResources, recordingState, stopRecording]);
 
   // Logout handler
   const handleLogout = useCallback(() => {
@@ -401,14 +482,9 @@ export default function BusshiSessionPage() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
+      cleanupRecordingResources();
     };
-  }, []);
+  }, [cleanupRecordingResources]);
 
   // ==========================================================================
   // Render
@@ -507,11 +583,21 @@ export default function BusshiSessionPage() {
               Spaceキー長押し または ボタン長押し
             </p>
 
+            {errorMessage && (
+              <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 w-full max-w-md text-center">
+                {errorMessage}
+              </div>
+            )}
+
             {/* 送信中インジケーター（シンプルに） */}
             {sendingCount > 0 && (
               <div className="flex items-center gap-2 text-sm text-gray-500">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>送信中... ({sendingCount}件)</span>
+                <span>
+                  {sendingPhase === 'ai'
+                    ? `AI解析中... (${sendingCount}件)`
+                    : `音声認識中... (${sendingCount}件)`}
+                </span>
               </div>
             )}
           </div>
@@ -525,6 +611,7 @@ export default function BusshiSessionPage() {
           isLoading={isEntriesLoading}
           scrollRef={scrollRef}
           onUpdateEntry={updateEntry}
+          onDeleteEntry={handleDeleteEntry}
           participants={participants}
           sessionId={sessionId}
         />

@@ -246,6 +246,28 @@ async def update_chronology_entry(
     return response
 
 
+@router.delete("/{entry_id}", status_code=204)
+async def delete_chronology_entry(
+    session_id: str,
+    entry_id: str,
+) -> None:
+    """
+    Delete a chronology entry.
+
+    Args:
+        session_id: The unique identifier of the session
+        entry_id: The unique identifier of the entry to delete
+
+    Raises:
+        HTTPException: 404 if session or entry not found
+    """
+    await _get_session_or_raise(session_id)
+
+    deleted = await storage_service.delete_chronology_entry(session_id, entry_id)
+    if not deleted:
+        raise NotFoundException("Chronology entry", entry_id)
+
+
 @router.get("/segments", response_model=list[Segment])
 async def list_segments(session_id: str) -> list[Segment]:
     """

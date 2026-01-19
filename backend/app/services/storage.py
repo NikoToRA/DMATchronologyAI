@@ -641,6 +641,47 @@ class StorageService:
         logger.info(f"Cleared all data for session {session_id}")
         return True
 
+    async def _delete_blob(self, path: str) -> None:
+        """
+        Delete a single blob/file.
+
+        Args:
+            path: The storage path to delete.
+
+        Raises:
+            StorageWriteError: If deletion fails.
+        """
+        if self.use_azure:
+            await self._delete_blob_azure(path)
+        else:
+            await self._delete_blob_local(path)
+
+    async def _delete_blob_azure(self, path: str) -> None:
+        """Delete a blob from Azure Blob Storage."""
+        try:
+            container = await self._get_container_client()
+            blob = container.get_blob_client(path)
+            await blob.delete_blob()
+            logger.debug(f"Deleted blob from Azure: {path}")
+        except ResourceNotFoundError:
+            logger.warning(f"Blob not found for deletion: {path}")
+        except AzureError as e:
+            logger.error(f"Azure delete error for {path}: {e}")
+            raise StorageWriteError(f"Failed to delete {path} from Azure: {e}") from e
+
+    async def _delete_blob_local(self, path: str) -> None:
+        """Delete a file from local filesystem."""
+        local_path = self._get_local_path(path)
+        try:
+            if local_path.exists():
+                local_path.unlink()
+                logger.debug(f"Deleted local file: {local_path}")
+            else:
+                logger.warning(f"File not found for deletion: {local_path}")
+        except OSError as e:
+            logger.error(f"File delete error for {local_path}: {e}")
+            raise StorageWriteError(f"Failed to delete {local_path}: {e}") from e
+
     async def _delete_blobs_with_prefix(self, prefix: str) -> int:
         """Delete all blobs with a given prefix."""
         if self.use_azure:
@@ -909,6 +950,33 @@ class StorageService:
                 return entry
         logger.warning(f"Chronology entry not found: {entry_id}")
         return None
+
+    async def delete_chronology_entry(
+        self, session_id: str, entry_id: str
+    ) -> bool:
+        """
+        Delete a chronology entry.
+
+        Args:
+            session_id: The unique session identifier.
+            entry_id: The unique entry identifier.
+
+        Returns:
+            True if the entry was deleted, False if not found.
+
+        Raises:
+            StorageWriteError: If deletion fails.
+        """
+        entries = await self.get_chronology_entries(session_id)
+        for entry in entries:
+            if entry.entry_id == entry_id:
+                timestamp_str = entry.timestamp.strftime("%Y-%m-%dT%H-%M-%S")
+                path = f"{session_id}/chronology/{timestamp_str}_{entry.entry_id}.json"
+                logger.debug(f"Deleting chronology entry: {entry_id}")
+                await self._delete_blob(path)
+                return True
+        logger.warning(f"Chronology entry not found for deletion: {entry_id}")
+        return False
 
     # ========== HQ Master Operations ==========
 

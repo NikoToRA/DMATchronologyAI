@@ -14,6 +14,7 @@ interface ChronologyEntryListProps {
   isLoading: boolean;
   scrollRef: RefObject<HTMLDivElement>;
   onUpdateEntry: (entryId: string, data: UpdateChronologyPayload) => void;
+  onDeleteEntry?: (entryId: string) => void;
   participants: Participant[] | undefined;
   sessionId: string;
 }
@@ -23,6 +24,7 @@ export function ChronologyEntryList({
   isLoading,
   scrollRef,
   onUpdateEntry,
+  onDeleteEntry,
   participants,
   sessionId,
 }: ChronologyEntryListProps) {
@@ -60,6 +62,7 @@ export function ChronologyEntryList({
               <ChronologyEntryCard
                 entry={entry}
                 onUpdate={onUpdateEntry}
+                onDelete={onDeleteEntry}
                 participants={participants}
                 sessionId={sessionId}
               />

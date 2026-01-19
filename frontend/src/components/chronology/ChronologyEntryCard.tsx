@@ -2,7 +2,7 @@
 
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
-import { AlertTriangle, CheckSquare, Square, Pencil, Save, X } from 'lucide-react';
+import { AlertTriangle, CheckSquare, Square, Pencil, Save, X, Trash2 } from 'lucide-react';
 import { useMemo, useState, useCallback } from 'react';
 import type { ChronologyEntry, Participant, UpdateChronologyPayload } from '@/lib/api';
 import { CategoryBadge } from '@/components/ui/Badge';
@@ -12,11 +12,12 @@ import { sessionHqApi } from '@/lib/api';
 interface ChronologyEntryCardProps {
   entry: ChronologyEntry;
   onUpdate: (entryId: string, data: UpdateChronologyPayload) => void;
+  onDelete?: (entryId: string) => void;
   participants: Participant[] | undefined;
   sessionId: string;
 }
 
-export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }: ChronologyEntryCardProps) {
+export function ChronologyEntryCard({ entry, onUpdate, onDelete, participants, sessionId }: ChronologyEntryCardProps) {
   const dateTimeLabel = format(new Date(entry.timestamp), 'MM/dd HH:mm', {
     locale: ja,
   });
@@ -118,9 +119,11 @@ export function ChronologyEntryCard({ entry, onUpdate, participants, sessionId }
           sessionId={sessionId}
           displayCategory={entry.category}
           displayHasTask={hasTask}
+          entryId={entry.entry_id}
           onStartEdit={startEdit}
           onCancelEdit={cancelEdit}
           onSaveEdit={saveEdit}
+          onDelete={onDelete}
           onCategoryChange={setDraftCategory}
           onHasTaskChange={setDraftHasTask}
           onHqIdChange={setDraftHqId}
@@ -252,9 +255,11 @@ function ActionsColumn({
   sessionId,
   displayCategory,
   displayHasTask,
+  entryId,
   onStartEdit,
   onCancelEdit,
   onSaveEdit,
+  onDelete,
   onCategoryChange,
   onHasTaskChange,
   onHqIdChange,
@@ -270,9 +275,11 @@ function ActionsColumn({
   sessionId: string;
   displayCategory: ChronologyEntry['category'];
   displayHasTask: boolean;
+  entryId: string;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onSaveEdit: () => void;
+  onDelete?: (entryId: string) => void;
   onCategoryChange: (c: ChronologyEntry['category']) => void;
   onHasTaskChange: (v: boolean) => void;
   onHqIdChange: (v: string) => void;
@@ -366,7 +373,21 @@ function ActionsColumn({
               </span>
             </div>
           </div>
-          <IconButton icon={Pencil} variant="ghost" label="編集" onClick={onStartEdit} />
+          <div className="flex items-center gap-1">
+            <IconButton icon={Pencil} variant="ghost" label="編集" onClick={onStartEdit} />
+            {onDelete && (
+              <IconButton
+                icon={Trash2}
+                variant="danger"
+                label="削除"
+                onClick={() => {
+                  if (window.confirm('このクロノロジーエントリを削除しますか？')) {
+                    onDelete(entryId);
+                  }
+                }}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>
