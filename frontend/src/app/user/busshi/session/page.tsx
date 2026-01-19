@@ -541,71 +541,8 @@ export default function BusshiSessionPage() {
         </div>
       </header>
 
-      {/* PTT Section - シンプル化 */}
-      <div className="bg-white border-b border-gray-200 sticky top-[60px] z-10">
-        <div className="max-w-4xl mx-auto px-4 py-4">
-          <div className="flex flex-col items-center gap-3">
-            {/* 録音ボタン */}
-            <button
-              onMouseDown={startRecording}
-              onMouseUp={stopRecording}
-              onMouseLeave={stopRecording}
-              onTouchStart={startRecording}
-              onTouchEnd={stopRecording}
-              disabled={recordingState === 'sending'}
-              className={`w-full max-w-md py-8 rounded-2xl font-bold text-xl transition-all ${
-                recordingState === 'recording'
-                  ? 'bg-red-500 text-white shadow-lg scale-[1.02]'
-                  : recordingState === 'sending'
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : 'bg-yellow-500 text-white hover:bg-yellow-600 active:bg-red-500'
-              }`}
-            >
-              {recordingState === 'recording' ? (
-                <span className="flex items-center justify-center gap-3">
-                  <span className="w-4 h-4 bg-white rounded-full animate-pulse" />
-                  録音中... {formatDuration(recordingDuration)}
-                </span>
-              ) : recordingState === 'sending' ? (
-                <span className="flex items-center justify-center gap-2">
-                  <Loader2 className="h-6 w-6 animate-spin" />
-                  送信中...
-                </span>
-              ) : (
-                <span className="flex items-center justify-center gap-2">
-                  <Mic className="h-6 w-6" />
-                  押して発話
-                </span>
-              )}
-            </button>
-
-            <p className="text-xs text-gray-500">
-              Spaceキー長押し または ボタン長押し
-            </p>
-
-            {errorMessage && (
-              <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 w-full max-w-md text-center">
-                {errorMessage}
-              </div>
-            )}
-
-            {/* 送信中インジケーター（シンプルに） */}
-            {sendingCount > 0 && (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>
-                  {sendingPhase === 'ai'
-                    ? `AI解析中... (${sendingCount}件)`
-                    : `音声認識中... (${sendingCount}件)`}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Chronology List */}
-      <main className="flex-1 max-w-4xl mx-auto w-full">
+      {/* Chronology List - フルスクリーン */}
+      <main className="flex-1 max-w-4xl mx-auto w-full pb-24">
         <ChronologyEntryList
           entries={entries}
           isLoading={isEntriesLoading}
@@ -617,9 +554,61 @@ export default function BusshiSessionPage() {
         />
       </main>
 
+      {/* フローティング録音ボタン - 右下固定 */}
+      <div className="fixed bottom-4 right-4 z-30 flex flex-col items-end gap-2">
+        {/* エラーメッセージ */}
+        {errorMessage && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-2 py-1 max-w-48 text-right shadow-lg">
+            {errorMessage}
+          </div>
+        )}
+
+        {/* 送信中インジケーター */}
+        {sendingCount > 0 && (
+          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-white rounded-lg px-2 py-1 shadow-lg border">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>
+              {sendingPhase === 'ai' ? 'AI解析中' : '音声認識中'}
+            </span>
+          </div>
+        )}
+
+        {/* 録音ボタン */}
+        <button
+          onMouseDown={startRecording}
+          onMouseUp={stopRecording}
+          onMouseLeave={stopRecording}
+          onTouchStart={startRecording}
+          onTouchEnd={stopRecording}
+          disabled={recordingState === 'sending'}
+          className={`px-4 py-3 rounded-xl font-bold text-sm shadow-lg transition-all ${
+            recordingState === 'recording'
+              ? 'bg-red-500 text-white scale-105'
+              : recordingState === 'sending'
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-yellow-500 text-white hover:bg-yellow-600 active:bg-red-500'
+          }`}
+        >
+          {recordingState === 'recording' ? (
+            <span className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 bg-white rounded-full animate-pulse" />
+              {formatDuration(recordingDuration)}
+            </span>
+          ) : recordingState === 'sending' ? (
+            <Loader2 className="h-5 w-5 animate-spin" />
+          ) : (
+            <span className="flex items-center gap-2">
+              <Mic className="h-5 w-5" />
+              <span className="hidden sm:inline">発話</span>
+              <span className="text-xs opacity-75">(Space)</span>
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* Simple Footer */}
-      <div className="bg-white border-t border-gray-200 py-3">
-        <div className="max-w-4xl mx-auto px-4 text-center text-sm text-gray-500">
+      <div className="bg-white border-t border-gray-200 py-2 fixed bottom-0 left-0 right-0 z-20">
+        <div className="max-w-4xl mx-auto px-4 text-center text-xs text-gray-400">
           全{stats.total}件
         </div>
       </div>
