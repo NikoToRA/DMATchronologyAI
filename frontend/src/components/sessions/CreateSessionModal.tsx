@@ -15,7 +15,7 @@ interface CreateSessionModalProps {
 const INITIAL_FORM_STATE: CreateSessionFormData = {
   session_kind: '',
   incident_name: '',
-  zoom_meeting_id: '',
+  zoom_meeting_id: undefined,
 };
 
 export function CreateSessionModal({
@@ -40,7 +40,7 @@ export function CreateSessionModal({
       onCreate({
         session_kind: formData.session_kind,
         incident_name: formData.incident_name,
-        zoom_meeting_id: formData.zoom_meeting_id || undefined,
+        zoom_meeting_id: undefined,
       });
     },
     [formData, onCreate]
@@ -72,14 +72,6 @@ export function CreateSessionModal({
             value={formData.incident_name}
             onChange={handleChange('incident_name')}
             placeholder="例：能登半島地震"
-          />
-
-          <TextInput
-            id="zoom-meeting-id"
-            label="ZoomミーティングID"
-            value={formData.zoom_meeting_id ?? ''}
-            onChange={handleChange('zoom_meeting_id')}
-            placeholder="例：123456789"
           />
         </div>
 

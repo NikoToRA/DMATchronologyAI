@@ -1,18 +1,24 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Mic, MicOff, ArrowLeft, AlertCircle, Check, Loader2,
-  Radio, Clock, User, Volume2, VolumeX
+  Mic,
+  ArrowLeft,
+  AlertCircle,
+  Check,
+  Loader2,
+  Clock,
+  User,
+  Volume2,
 } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import { sessionsApi, participantsApi, Participant, api } from '@/lib/api';
 
-type ListeningState = 'idle' | 'listening' | 'recording' | 'processing' | 'success' | 'error';
+type RecordingState = 'idle' | 'recording' | 'processing';
 
 interface ProcessedEntry {
   entry_id: string;
@@ -23,94 +29,41 @@ interface ProcessedEntry {
   timestamp: string;
 }
 
-// Voice Activity Detection settings type
-interface VadSettings {
-  speechThresholdDb: number;
-  silenceThresholdDb: number;
-  silenceDurationMs: number;
-  minRecordingDurationMs: number;
-  maxRecordingDurationMs: number;
-  preRollMs: number;
-  postRollMs: number;
+function guessAudioExtension(mimeType: string | undefined): string {
+  const t = (mimeType || '').toLowerCase();
+  if (t.includes('audio/webm')) return 'webm';
+  if (t.includes('audio/wav') || t.includes('audio/wave') || t.includes('audio/x-wav')) return 'wav';
+  if (t.includes('audio/ogg')) return 'ogg';
+  if (t.includes('audio/mpeg') || t.includes('audio/mp3')) return 'mp3';
+  if (t.includes('audio/mp4') || t.includes('audio/x-m4a')) return 'm4a';
+  return 'webm';
 }
-
-// Voice Activity Detection defaults
-// NOTE: If "silence" sits around -50dB (noisy room / AGC), using -60/-75 will never stop.
-// These defaults aim to work in that environment out-of-the-box.
-const DEFAULT_VAD: VadSettings = {
-  speechThresholdDb: -45,        // start when clearly above noise floor (lowered for better sensitivity)
-  silenceThresholdDb: -50,       // treat around/below noise floor as "silence" to allow stopping
-  silenceDurationMs: 2000,       // stop after this much "silence" (increased to avoid cutting off speech)
-  minRecordingDurationMs: 500,   // shorter => accept shorter utterances
-  maxRecordingDurationMs: 15000, // force-send chunk (increased to allow longer utterances)
-  preRollMs: 500,                // pre-roll buffer to capture speech before detection
-  postRollMs: 300,               // post-roll tail to capture trailing speech
-};
-
-type VadPreset = 'zoom' | 'quiet' | 'sensitive';
-const VAD_PRESETS: Record<VadPreset, VadSettings> = {
-  zoom: DEFAULT_VAD,
-  quiet: {
-    speechThresholdDb: -55,
-    silenceThresholdDb: -65,
-    silenceDurationMs: 2500,
-    minRecordingDurationMs: 400,
-    maxRecordingDurationMs: 20000,
-    preRollMs: 700,
-    postRollMs: 400,
-  },
-  sensitive: {
-    speechThresholdDb: -50,
-    silenceThresholdDb: -55,
-    silenceDurationMs: 2500,
-    minRecordingDurationMs: 300,
-    maxRecordingDurationMs: 25000,
-    preRollMs: 800,
-    postRollMs: 500,
-  },
-};
 
 export default function RecordPage() {
   const params = useParams();
-  const router = useRouter();
   const queryClient = useQueryClient();
   const sessionId = params.id as string;
 
   // State
-  const [listeningState, setListeningState] = useState<ListeningState>('idle');
+  const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [selectedSpeaker, setSelectedSpeaker] = useState<string>(''); // participant_id
-  const [currentVolume, setCurrentVolume] = useState<number>(-100);
+  const [audioLevel, setAudioLevel] = useState(0);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [lastResult, setLastResult] = useState<ProcessedEntry | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [processedCount, setProcessedCount] = useState(0);
-  const [vad, setVad] = useState(() => ({ ...DEFAULT_VAD }));
   const [lastSendStatus, setLastSendStatus] = useState<any>(null);
-  const [lastStopReason, setLastStopReason] = useState<string>('');
-  const [lastRecorderError, setLastRecorderError] = useState<string>('');
 
   // Refs
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const lastChunkSizeRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
   const silenceStartRef = useRef<number | null>(null);
   const recordingStartRef = useRef<number | null>(null);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const isRecordingRef = useRef<boolean>(false);
-  const vadRef = useRef(vad);
-  // Pre-roll buffer: keep recent audio chunks to capture speech before VAD triggers
-  const preRollBufferRef = useRef<{ blob: Blob; timestamp: number }[]>([]);
-  const preRollRecorderRef = useRef<MediaRecorder | null>(null);
-  const isPreRollingRef = useRef<boolean>(false);
-  // Post-roll: delay stopping after silence detected
-  const postRollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    vadRef.current = vad;
-  }, [vad]);
 
   // Queries
   const { data: session } = useQuery({
@@ -135,461 +88,251 @@ export default function RecordPage() {
     },
   });
 
-  // Calculate volume in dB from analyser data (time-domain RMS; more stable for VAD)
-  const calculateVolume = useCallback(() => {
-    if (!analyserRef.current) return -100;
+  const updateAudioLevel = useCallback(() => {
+    if (!analyserRef.current) return;
 
-    // Use time domain waveform (-1..1) instead of frequency bins to avoid "always loud" readings.
-    const bufferLength = analyserRef.current.fftSize;
-    const dataArray = new Float32Array(bufferLength);
-    analyserRef.current.getFloatTimeDomainData(dataArray);
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(dataArray);
 
-    let sumSquares = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      const v = dataArray[i];
-      sumSquares += v * v;
+    const sum = dataArray.reduce((a, b) => a + b, 0);
+    const avg = sum / dataArray.length;
+    const level = Math.min(100, Math.round((avg / 255) * 100 * 1.5));
+
+    setAudioLevel(level);
+
+    if (recordingState === 'recording') {
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
     }
-    const rms = Math.sqrt(sumSquares / dataArray.length);
-
-    // Convert to dBFS (0 = full scale, smaller/negative = quieter)
-    const db = rms > 0 ? 20 * Math.log10(rms) : -100;
-    return Math.max(-100, Math.min(0, db));
-  }, []);
+  }, [recordingState]);
 
   // Process and send recorded audio
-  const processRecording = useCallback(async () => {
-    if (audioChunksRef.current.length === 0) return;
-
-    setListeningState('processing');
-
-    try {
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      audioChunksRef.current = [];
-
-      const participantId = selectedSpeaker;
-      if (!participantId) {
-        setErrorMessage('発信者を選択してください');
-        setListeningState('error');
-        return;
-      }
-
-      // Send to API
-      const formData = new FormData();
-      formData.append('audio', audioBlob, 'recording.webm');
-      formData.append('participant_id', participantId);
-      formData.append('timestamp', new Date().toISOString());
-
-      const res = await api.post(
-        `/api/zoom/audio/${sessionId}`,
-        formData,
-        {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          timeout: 60000,
-        }
-      );
-
-      const result = res.data as any;
-      setLastSendStatus(result);
-      if (result && result.ok === false) {
-        const stage = result.stage ? `(${result.stage}) ` : '';
-        const reason =
-          result.error ||
-          (result.skipped ? '処理がスキップされました（無音/認識なし等）' : '処理に失敗しました');
-        setErrorMessage(`${stage}${reason}`);
-        // Skips (e.g., stt_text_len=0) are common in noisy environments; keep listening.
-        if (result.skipped) {
-          setListeningState('recording');
-          return;
-        }
-        setListeningState('error');
-        return;
-      }
-
-      // Get the latest chronology entry
-      const chronologyResponse = await api.get(`/api/sessions/${sessionId}/chronology`);
-      const entries = chronologyResponse.data;
-      if (entries.length > 0) {
-        setLastResult(entries[entries.length - 1]);
-      } else if (result?.entry_id) {
-        // Backend says it created an entry, but list is empty: show a helpful warning.
-        setErrorMessage(`(list) 保存は完了しましたが一覧取得で0件でした。entry_id=${result.entry_id}`);
-      }
-
-      setProcessedCount(prev => prev + 1);
-      queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
-
-      // Continue monitoring: restart recorder in listening mode (pre-roll capture)
-      try {
-        if (mediaRecorderRef.current && streamRef.current) {
-          audioChunksRef.current = [];
-          preRollBufferRef.current = []; // Clear pre-roll buffer for fresh capture
-          lastChunkSizeRef.current = 0;
-          mediaRecorderRef.current.start(100);
-          // Restart in listening mode - VAD will trigger recording on speech
-          isRecordingRef.current = false;
-          recordingStartRef.current = null;
-          silenceStartRef.current = null;
-          setListeningState('listening');
-          setRecordingDuration(0);
-        } else {
-          setListeningState('listening');
-        }
-      } catch {
-        // If restart fails, fall back to listening state (user can restart manually)
-        setListeningState('listening');
-      }
-
-    } catch (err: unknown) {
-      console.error('Failed to process audio:', err);
-      const errorMsg =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : '音声処理に失敗しました';
-      setErrorMessage(errorMsg);
-      setListeningState('error');
+  const cleanupRecordingResources = useCallback(() => {
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
     }
-  }, [sessionId, selectedSpeaker, queryClient]);
 
-  // Start recording (called when speech detected)
-  const startRecording = useCallback(() => {
-    if (!mediaRecorderRef.current || isRecordingRef.current) return;
-
-    console.log('Speech detected - starting recording');
-
-    // Prepend pre-roll buffer to capture audio before VAD triggered
-    const preRollMs = vadRef.current.preRollMs || 500;
-    const now = Date.now();
-    const relevantPreRoll = preRollBufferRef.current.filter(
-      (chunk) => now - chunk.timestamp <= preRollMs
-    );
-    console.log(`Pre-roll: ${relevantPreRoll.length} chunks from buffer`);
-
-    // Start with pre-roll chunks
-    audioChunksRef.current = relevantPreRoll.map((chunk) => chunk.blob);
-
-    try {
-      mediaRecorderRef.current.start(100);
-    } catch (e: any) {
-      const msg = e?.message ? String(e.message) : 'MediaRecorder.start() failed';
-      setLastRecorderError(msg);
-      setErrorMessage(`録音開始に失敗しました: ${msg}`);
-      setListeningState('error');
-      return;
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
-    isRecordingRef.current = true;
-    recordingStartRef.current = Date.now();
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    mediaRecorderRef.current = null;
+    analyserRef.current = null;
+
+    audioChunksRef.current = [];
+    recordingStartRef.current = null;
     silenceStartRef.current = null;
-    // Clear any pending post-roll timeout
-    if (postRollTimeoutRef.current) {
-      clearTimeout(postRollTimeoutRef.current);
-      postRollTimeoutRef.current = null;
-    }
-    setListeningState('recording');
+    setAudioLevel(0);
     setRecordingDuration(0);
   }, []);
 
-  // Stop recording (called when silence/max/force)
-  const stopRecording = useCallback(() => {
-    if (!mediaRecorderRef.current || !isRecordingRef.current) return;
-
-    const recordingDuration = recordingStartRef.current
-      ? Date.now() - recordingStartRef.current
-      : 0;
-
-    // Only process if recording was long enough
-    if (recordingDuration < vadRef.current.minRecordingDurationMs) {
-      console.log('Recording too short, discarding');
-      audioChunksRef.current = [];
-      isRecordingRef.current = false;
-      setListeningState('listening');
-      return;
-    }
-
-    console.log('Stopping recording');
-    try {
-      // Flush any buffered data before stopping (important on some browsers)
-      if (mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.requestData();
+  const processRecording = useCallback(
+    async (recordedMimeType: string | undefined) => {
+      if (audioChunksRef.current.length === 0) {
+        setRecordingState('idle');
+        cleanupRecordingResources();
+        return;
       }
-    } catch {
-      // ignore
-    }
-    try {
-      mediaRecorderRef.current.stop();
-    } catch (e: any) {
-      const msg = e?.message ? String(e.message) : 'MediaRecorder.stop() failed';
-      setLastRecorderError(msg);
-      setErrorMessage(`録音停止に失敗しました: ${msg}`);
-      setListeningState('error');
-      return;
-    }
-    isRecordingRef.current = false;
-  }, []);
 
-  // Force stop+send (useful for debugging/noisy environments)
-  const forceSend = useCallback(() => {
-    if (!mediaRecorderRef.current) {
-      setErrorMessage('MediaRecorderが初期化されていません（ブラウザ非対応の可能性）');
-      return;
-    }
-    if (!isRecordingRef.current) {
-      setErrorMessage('まだ録音が開始されていません（話し始めで録音開始→その後に強制送信できます）');
-      return;
-    }
-    setLastStopReason('force');
-    stopRecording();
-  }, [listeningState, stopRecording]);
+      setRecordingState('processing');
 
-  // Schedule stop with post-roll delay
-  const scheduleStop = useCallback((reason: string) => {
-    const postRollMs = vadRef.current.postRollMs || 300;
-
-    // Clear any existing post-roll timeout
-    if (postRollTimeoutRef.current) {
-      clearTimeout(postRollTimeoutRef.current);
-    }
-
-    postRollTimeoutRef.current = setTimeout(() => {
-      setLastStopReason(reason);
-      stopRecording();
-      postRollTimeoutRef.current = null;
-    }, postRollMs);
-  }, [stopRecording]);
-
-  // Cancel scheduled stop (if speech resumes)
-  const cancelScheduledStop = useCallback(() => {
-    if (postRollTimeoutRef.current) {
-      clearTimeout(postRollTimeoutRef.current);
-      postRollTimeoutRef.current = null;
-    }
-  }, []);
-
-  // Voice Activity Detection loop
-  const vadLoop = useCallback(() => {
-    const volume = calculateVolume();
-    setCurrentVolume(volume);
-
-    const now = Date.now();
-
-    if (listeningState === 'listening' || listeningState === 'recording') {
-      if (!isRecordingRef.current) {
-        // Not recording - check for speech start
-        if (volume > vadRef.current.speechThresholdDb) {
-          startRecording();
-        }
-      } else {
-        // Recording - check for silence with post-roll
-        if (volume < vadRef.current.silenceThresholdDb) {
-          if (!silenceStartRef.current) {
-            silenceStartRef.current = now;
-          } else if (now - silenceStartRef.current > vadRef.current.silenceDurationMs) {
-            // Silence duration exceeded - schedule stop with post-roll
-            if (!postRollTimeoutRef.current) {
-              scheduleStop('silence');
-            }
-          }
-        } else {
-          // Speech detected - reset silence timer and cancel any pending stop
-          silenceStartRef.current = null;
-          cancelScheduledStop();
+      try {
+        const participantId = selectedSpeaker;
+        if (!participantId) {
+          setErrorMessage('発信者を選択してください');
+          setRecordingState('idle');
+          cleanupRecordingResources();
+          return;
         }
 
-        // Force-stop after max duration to ensure we periodically send chunks even with background noise.
-        if (
-          recordingStartRef.current &&
-          now - recordingStartRef.current > vadRef.current.maxRecordingDurationMs
-        ) {
-          cancelScheduledStop(); // Cancel any pending post-roll
-          setLastStopReason('max');
-          stopRecording();
-          silenceStartRef.current = null;
+        const mime = recordedMimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: mime });
+        audioChunksRef.current = [];
+
+        const formData = new FormData();
+        const ext = guessAudioExtension(mime);
+        formData.append('audio', audioBlob, `recording.${ext}`);
+        formData.append('participant_id', participantId);
+        formData.append('timestamp', new Date().toISOString());
+
+        const res = await api.post(`/api/zoom/audio/${sessionId}`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 60000,
+        });
+
+        const result = res.data as any;
+        setLastSendStatus(result);
+        if (result && result.ok === false) {
+          const stage = result.stage ? `(${result.stage}) ` : '';
+          const reason =
+            result.error ||
+            (result.skipped ? '処理がスキップされました（無音/認識なし等）' : '処理に失敗しました');
+          setErrorMessage(`${stage}${reason}`);
+          setRecordingState('idle');
+          cleanupRecordingResources();
+          return;
         }
 
-        // Update recording duration
-        if (recordingStartRef.current) {
-          setRecordingDuration(Math.floor((now - recordingStartRef.current) / 1000));
+        // Get the latest chronology entry
+        const chronologyResponse = await api.get(`/api/sessions/${sessionId}/chronology`);
+        const entries = chronologyResponse.data;
+        if (entries.length > 0) {
+          setLastResult(entries[entries.length - 1]);
+        } else if (result?.entry_id) {
+          setErrorMessage(`(list) 保存は完了しましたが一覧取得で0件でした。entry_id=${result.entry_id}`);
         }
+
+        setProcessedCount((prev) => prev + 1);
+        queryClient.invalidateQueries({ queryKey: ['chronology', sessionId] });
+      } catch (err: unknown) {
+        console.error('Failed to process audio:', err);
+        const errorMsg =
+          err instanceof Error ? err.message : typeof err === 'string' ? err : '音声処理に失敗しました';
+        setErrorMessage(errorMsg);
+      } finally {
+        setRecordingState('idle');
+        cleanupRecordingResources();
       }
-    }
+    },
+    [cleanupRecordingResources, queryClient, selectedSpeaker, sessionId]
+  );
 
-    animationFrameRef.current = requestAnimationFrame(vadLoop);
-  }, [listeningState, calculateVolume, startRecording, stopRecording, scheduleStop, cancelScheduledStop]);
+  const startRecording = useCallback(async () => {
+    if (recordingState !== 'idle') return;
 
-  // Start listening (initialize audio context and start VAD)
-  const startListening = useCallback(async () => {
     if (!selectedSpeaker) {
-      setErrorMessage('話者を選択してください');
+      setErrorMessage('発信者を選択してください');
       return;
     }
 
     try {
       setErrorMessage('');
       setLastResult(null);
+      setLastSendStatus(null);
 
-      // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
-        }
+          autoGainControl: false,
+        },
       });
       streamRef.current = stream;
 
-      // Setup audio context and analyser for VAD
       const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
 
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.8;
-      analyserRef.current = analyser;
-
       const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
       source.connect(analyser);
 
-      // Setup media recorder
-      const candidates = [
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/mp4',
-      ];
+      const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
       const chosenMime =
         candidates.find((t) => (typeof MediaRecorder !== 'undefined' ? MediaRecorder.isTypeSupported?.(t) : false)) ??
         '';
-      const mediaRecorder = new MediaRecorder(
-        stream,
-        chosenMime ? { mimeType: chosenMime } : undefined
-      );
-      mediaRecorderRef.current = mediaRecorder;
 
-      mediaRecorder.onstart = () => {
-        // keep UI in sync even if start was delayed
-        setLastRecorderError('');
-      };
-      mediaRecorder.onerror = (evt: any) => {
-        const msg = evt?.error?.message ? String(evt.error.message) : 'MediaRecorder error';
-        setLastRecorderError(msg);
-        setErrorMessage(`MediaRecorderエラー: ${msg}`);
-        setListeningState('error');
-      };
+      const mediaRecorder = new MediaRecorder(stream, chosenMime ? { mimeType: chosenMime } : undefined);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          // If actively recording, add to main chunks
-          if (isRecordingRef.current) {
-            audioChunksRef.current.push(event.data);
-            lastChunkSizeRef.current = event.data.size;
-          } else {
-            // If not recording (listening mode), add to pre-roll buffer
-            const now = Date.now();
-            preRollBufferRef.current.push({ blob: event.data, timestamp: now });
-
-            // Keep pre-roll buffer within reasonable size (last 2 seconds)
-            const preRollLimit = Math.max(vadRef.current.preRollMs || 500, 2000);
-            preRollBufferRef.current = preRollBufferRef.current.filter(
-              (chunk) => now - chunk.timestamp <= preRollLimit
-            );
-          }
+          audioChunksRef.current.push(event.data);
         }
       };
 
-      mediaRecorder.onstop = () => {
-        processRecording();
+      mediaRecorder.onerror = (evt: any) => {
+        const msg = evt?.error?.message ? String(evt.error.message) : 'MediaRecorder error';
+        setErrorMessage(`MediaRecorderエラー: ${msg}`);
+        setRecordingState('idle');
+        cleanupRecordingResources();
       };
 
-      // IMPORTANT: Start MediaRecorder immediately from the user gesture ("監視開始") so it works reliably
-      // across browsers. But start in "listening" mode (pre-roll capture), not active recording.
-      // VAD will trigger actual recording when speech is detected.
-      try {
-        audioChunksRef.current = [];
-        preRollBufferRef.current = []; // Clear pre-roll buffer
-        mediaRecorder.start(100);
-        // Start in listening mode - pre-roll capture will begin
-        isRecordingRef.current = false;
-        recordingStartRef.current = null;
-        silenceStartRef.current = null;
-        setListeningState('listening');
-        setRecordingDuration(0);
-      } catch (e: any) {
-        const msg = e?.message ? String(e.message) : 'MediaRecorder.start() failed';
-        setLastRecorderError(msg);
-        setErrorMessage(`録音開始に失敗しました: ${msg}`);
-        setListeningState('error');
-        return;
-      }
+      mediaRecorder.onstop = () => {
+        processRecording(mediaRecorder.mimeType);
+      };
 
-      // Start VAD loop
-      animationFrameRef.current = requestAnimationFrame(vadLoop);
+      mediaRecorder.start(100);
+      recordingStartRef.current = Date.now();
+      setRecordingState('recording');
+      setRecordingDuration(0);
 
+      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+
+      recordingIntervalRef.current = setInterval(() => {
+        if (recordingStartRef.current) {
+          setRecordingDuration(Math.floor((Date.now() - recordingStartRef.current) / 1000));
+        }
+      }, 100);
     } catch (err) {
-      console.error('Failed to start listening:', err);
+      console.error('Failed to start recording:', err);
       setErrorMessage('録音初期化に失敗しました（マイク権限/MediaRecorder非対応の可能性）');
-      setListeningState('error');
+      setRecordingState('idle');
+      cleanupRecordingResources();
     }
-  }, [selectedSpeaker, vadLoop, processRecording]);
+  }, [cleanupRecordingResources, processRecording, recordingState, selectedSpeaker, updateAudioLevel]);
 
-  // Stop listening
-  const stopListening = useCallback(() => {
-    // Cancel animation frame
+  const stopRecording = useCallback(() => {
+    if (recordingState !== 'recording' || !mediaRecorderRef.current) return;
+
+    // Stop timers/UI updates first
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
 
-    // Cancel any pending post-roll timeout
-    if (postRollTimeoutRef.current) {
-      clearTimeout(postRollTimeoutRef.current);
-      postRollTimeoutRef.current = null;
+    const durationMs = recordingStartRef.current ? Date.now() - recordingStartRef.current : 0;
+    if (durationMs < 500) {
+      // Too short -> discard
+      audioChunksRef.current = [];
+      setRecordingState('idle');
+      cleanupRecordingResources();
+      return;
     }
 
-    // Stop media recorder
-    if (mediaRecorderRef.current) {
-      try {
-        if (mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
-        }
-      } catch {
-        // Ignore stop errors
+    try {
+      if (mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.requestData();
       }
-      isRecordingRef.current = false;
+    } catch {
+      // ignore
     }
 
-    // Clear buffers
-    audioChunksRef.current = [];
-    preRollBufferRef.current = [];
-
-    // Close audio context
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
+    try {
+      mediaRecorderRef.current.stop();
+    } catch (e: any) {
+      const msg = e?.message ? String(e.message) : 'MediaRecorder.stop() failed';
+      setErrorMessage(`録音停止に失敗しました: ${msg}`);
+      setRecordingState('idle');
+      cleanupRecordingResources();
     }
-
-    // Stop stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-
-    setListeningState('idle');
-    setCurrentVolume(-100);
-  }, []);
+  }, [cleanupRecordingResources, recordingState]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      stopListening();
+      cleanupRecordingResources();
     };
-  }, [stopListening]);
-
-  // Restart VAD loop when state changes to listening
-  useEffect(() => {
-    if (listeningState === 'listening' && analyserRef.current && !animationFrameRef.current) {
-      animationFrameRef.current = requestAnimationFrame(vadLoop);
-    }
-  }, [listeningState, vadLoop]);
+  }, [cleanupRecordingResources]);
 
   // Format duration
   const formatDuration = (seconds: number) => {
@@ -598,18 +341,30 @@ export default function RecordPage() {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Volume meter display
-  const getVolumeBarWidth = () => {
-    const normalized = (currentVolume + 100) / 100;
-    return `${Math.max(0, Math.min(100, normalized * 100))}%`;
-  };
+  // Keyboard PTT (Space press-and-hold)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault();
+        startRecording();
+      }
+    };
 
-  const getVolumeColor = () => {
-    // Use current VAD thresholds so the meter reflects what will trigger recording.
-    if (currentVolume > vad.speechThresholdDb) return 'bg-green-500';
-    if (currentVolume > vad.silenceThresholdDb) return 'bg-yellow-500';
-    return 'bg-gray-400';
-  };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        stopRecording();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [startRecording, stopRecording]);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -624,7 +379,7 @@ export default function RecordPage() {
             戻る
           </Link>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">音声自動検知</h1>
+            <h1 className="text-xl font-bold text-gray-900">音声入力（プッシュ録音）</h1>
             <p className="text-sm text-gray-500">{session?.title}</p>
           </div>
         </div>
@@ -648,7 +403,7 @@ export default function RecordPage() {
                 const created = await addSpeakerMutation.mutateAsync(name.trim());
                 setSelectedSpeaker(created.participant_id);
               }}
-              disabled={addSpeakerMutation.isPending || listeningState !== 'idle'}
+              disabled={addSpeakerMutation.isPending || recordingState !== 'idle'}
               className="text-sm text-primary-600 hover:text-primary-700 disabled:opacity-50"
             >
               ＋発信者を追加
@@ -660,12 +415,12 @@ export default function RecordPage() {
               <button
                 key={p.participant_id}
                 onClick={() => setSelectedSpeaker(p.participant_id)}
-                disabled={listeningState !== 'idle'}
+                disabled={recordingState !== 'idle'}
                 className={`p-3 rounded-lg border-2 text-left transition-all ${
                   selectedSpeaker === p.participant_id
                     ? 'border-primary-500 bg-primary-50 text-primary-700'
                     : 'border-gray-200 hover:border-gray-300 text-gray-700'
-                } ${listeningState !== 'idle' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                } ${recordingState !== 'idle' ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <div className="font-medium">{p.zoom_display_name}</div>
                 {p.hq_name && <div className="text-xs text-gray-500 mt-0.5">{p.hq_name}</div>}
@@ -687,154 +442,14 @@ export default function RecordPage() {
           )}
         </div>
 
-        {/* Listening Control */}
+        {/* Push-to-talk control */}
         <div className="bg-white rounded-lg shadow-sm p-6">
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
             <Mic className="h-5 w-5 text-gray-500" />
-            音声監視
+            録音
           </h2>
 
-          {/* VAD tuning */}
-          <div className="mb-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-gray-800">検知感度（VAD）</div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Zoom/現場の騒音を想定して、多少ノイズが入っても録音される方向に調整できます。
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={() => setVad({ ...VAD_PRESETS.zoom })}
-                  disabled={listeningState !== 'idle'}
-                  className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 hover:bg-gray-100 disabled:opacity-50"
-                >
-                  Zoom想定
-                </button>
-                <button
-                  onClick={() => setVad({ ...VAD_PRESETS.quiet })}
-                  disabled={listeningState !== 'idle'}
-                  className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 hover:bg-gray-100 disabled:opacity-50"
-                >
-                  静かな環境
-                </button>
-                <button
-                  onClick={() => setVad({ ...VAD_PRESETS.sensitive })}
-                  disabled={listeningState !== 'idle'}
-                  className="rounded-md bg-white px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 hover:bg-gray-100 disabled:opacity-50"
-                >
-                  高感度
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-1 gap-4">
-              <VadSlider
-                label="開始しきい値（話し始め）"
-                value={vad.speechThresholdDb}
-                min={-90}
-                max={-10}
-                step={1}
-                disabled={listeningState !== 'idle'}
-                hint="小さい声で開始しない場合は、より小さい値（例：-70）へ"
-                onChange={(v) => setVad((prev) => ({ ...prev, speechThresholdDb: v }))}
-              />
-              <VadSlider
-                label="停止しきい値（無音判定）"
-                value={vad.silenceThresholdDb}
-                min={-100}
-                max={-20}
-                step={1}
-                disabled={listeningState !== 'idle'}
-                hint="途中で切れやすい場合は、より小さい値（例：-80）へ"
-                onChange={(v) => setVad((prev) => ({ ...prev, silenceThresholdDb: v }))}
-              />
-              <VadSlider
-                label="無音継続（停止まで）"
-                value={vad.silenceDurationMs}
-                min={800}
-                max={5000}
-                step={100}
-                disabled={listeningState !== 'idle'}
-                suffix="ms"
-                hint="Zoomの間や言い直しが多い場合は長めに"
-                onChange={(v) => setVad((prev) => ({ ...prev, silenceDurationMs: v }))}
-              />
-              <VadSlider
-                label="最低録音時間（短い録音を捨てる）"
-                value={vad.minRecordingDurationMs}
-                min={200}
-                max={2000}
-                step={100}
-                disabled={listeningState !== 'idle'}
-                suffix="ms"
-                hint="短い相づちも拾いたいなら短めに"
-                onChange={(v) => setVad((prev) => ({ ...prev, minRecordingDurationMs: v }))}
-              />
-              <VadSlider
-                label="最大録音時間（強制送信）"
-                value={vad.maxRecordingDurationMs}
-                min={3000}
-                max={30000}
-                step={1000}
-                disabled={listeningState !== 'idle'}
-                suffix="ms"
-                hint="無音になりにくい環境（Zoom/騒音）では短め（例：10-15秒）がおすすめ"
-                onChange={(v) => setVad((prev) => ({ ...prev, maxRecordingDurationMs: v }))}
-              />
-              <VadSlider
-                label="プリロール（話し始め前を含める）"
-                value={vad.preRollMs}
-                min={0}
-                max={2000}
-                step={100}
-                disabled={listeningState !== 'idle'}
-                suffix="ms"
-                hint="音声検知前の音声も含めて切れにくくする"
-                onChange={(v) => setVad((prev) => ({ ...prev, preRollMs: v }))}
-              />
-              <VadSlider
-                label="ポストロール（話し終わり後を含める）"
-                value={vad.postRollMs}
-                min={0}
-                max={1000}
-                step={50}
-                disabled={listeningState !== 'idle'}
-                suffix="ms"
-                hint="無音検知後も少し待って末尾を取りこぼさない"
-                onChange={(v) => setVad((prev) => ({ ...prev, postRollMs: v }))}
-              />
-            </div>
-          </div>
-
           <div className="flex flex-col items-center gap-6">
-            <div className="w-full rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-              <div className="flex items-center justify-between gap-3">
-                <div className="font-semibold">
-                  状態: <span className="font-mono">{listeningState}</span>
-                </div>
-                <button
-                  onClick={forceSend}
-                  disabled={!isRecordingRef.current}
-                  className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-                >
-                  今すぐ送信（強制）
-                </button>
-              </div>
-              <div className="mt-2 text-xs text-gray-600">
-                送信は「録音停止」で発生します。無音が止まらない（ノイズが-50付近）場合は、開始しきい値を-40前後、停止しきい値を-45前後にすると止まりやすいです。
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-600">
-                <div>rec_state: {mediaRecorderRef.current?.state ?? '-'}</div>
-                <div>mime: {mediaRecorderRef.current?.mimeType ?? '-'}</div>
-                <div>isRecording: {String(isRecordingRef.current)}</div>
-                <div>chunks: {audioChunksRef.current.length}</div>
-                <div>lastChunkSize: {lastChunkSizeRef.current || '-'}</div>
-                <div>lastStop: {lastStopReason || '-'}</div>
-                <div className="col-span-2">rec_error: {lastRecorderError || '-'}</div>
-              </div>
-            </div>
-
             {lastSendStatus && (
               <div className="w-full rounded-lg border border-gray-200 bg-white px-4 py-3 text-xs text-gray-700">
                 <div className="font-semibold text-gray-800">直近の送信結果</div>
@@ -854,18 +469,20 @@ export default function RecordPage() {
             )}
 
             {/* Volume Meter */}
-            {(listeningState === 'listening' || listeningState === 'recording') && (
+            {recordingState === 'recording' && (
               <div className="w-full">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm text-gray-500">音量レベル</span>
                   <span className="text-sm font-mono text-gray-600">
-                    {currentVolume.toFixed(0)} dB
+                    {audioLevel}%
                   </span>
                 </div>
                 <div className="w-full h-4 bg-gray-200 rounded-full overflow-hidden">
                   <div
-                    className={`h-full transition-all duration-100 ${getVolumeColor()}`}
-                    style={{ width: getVolumeBarWidth() }}
+                    className={`h-full transition-all duration-75 ${
+                      audioLevel > 70 ? 'bg-red-500' : audioLevel > 40 ? 'bg-yellow-500' : 'bg-green-500'
+                    }`}
+                    style={{ width: `${audioLevel}%` }}
                   />
                 </div>
                 <div className="flex justify-between mt-1 text-xs text-gray-400">
@@ -877,52 +494,43 @@ export default function RecordPage() {
             )}
 
             {/* Status Display */}
-            {listeningState === 'listening' && (
-              <div className="flex items-center gap-3 text-blue-600">
-                <Volume2 className="h-6 w-6 animate-pulse" />
-                <span className="text-lg">音声待機中...</span>
-              </div>
-            )}
-
-            {listeningState === 'recording' && (
+            {recordingState === 'recording' && (
               <div className="flex items-center gap-3 text-red-600">
-                <Radio className="h-6 w-6 animate-pulse" />
+                <Volume2 className="h-6 w-6 animate-pulse" />
                 <span className="text-2xl font-mono">{formatDuration(recordingDuration)}</span>
-                <span className="text-lg">録音中...</span>
+                <span className="text-lg">録音中（離すと送信）</span>
               </div>
             )}
 
-            {listeningState === 'processing' && (
+            {recordingState === 'processing' && (
               <div className="flex items-center gap-3 text-blue-600">
                 <Loader2 className="h-6 w-6 animate-spin" />
-                <span>処理中...</span>
+                <span>送信中...</span>
               </div>
             )}
 
             {/* Control Buttons */}
             <div className="flex gap-4">
-              {listeningState === 'idle' || listeningState === 'error' ? (
-                <button
-                  onClick={startListening}
-                  disabled={!selectedSpeaker}
-                  className={`flex items-center gap-2 px-8 py-4 rounded-full text-white font-medium text-lg transition-all ${
-                    selectedSpeaker
-                      ? 'bg-green-500 hover:bg-green-600'
-                      : 'bg-gray-300 cursor-not-allowed'
-                  }`}
-                >
-                  <Mic className="h-6 w-6" />
-                  監視開始
-                </button>
-              ) : listeningState !== 'processing' ? (
-                <button
-                  onClick={stopListening}
-                  className="flex items-center gap-2 px-8 py-4 rounded-full bg-gray-800 hover:bg-gray-900 text-white font-medium text-lg transition-all"
-                >
-                  <MicOff className="h-6 w-6" />
-                  監視停止
-                </button>
-              ) : null}
+              <button
+                onMouseDown={startRecording}
+                onMouseUp={stopRecording}
+                onMouseLeave={stopRecording}
+                onTouchStart={startRecording}
+                onTouchEnd={stopRecording}
+                disabled={!selectedSpeaker || recordingState === 'processing'}
+                className={`flex items-center gap-2 px-8 py-4 rounded-full text-white font-medium text-lg transition-all ${
+                  !selectedSpeaker
+                    ? 'bg-gray-300 cursor-not-allowed'
+                    : recordingState === 'recording'
+                      ? 'bg-red-500 hover:bg-red-600'
+                      : recordingState === 'processing'
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-gray-800 hover:bg-gray-900 active:bg-red-500'
+                }`}
+              >
+                <Mic className="h-6 w-6" />
+                {recordingState === 'recording' ? '録音中...' : '押して録音（Space長押し）'}
+              </button>
             </div>
 
             {/* Stats */}
@@ -979,63 +587,15 @@ export default function RecordPage() {
           <h3 className="font-semibold mb-2">使い方</h3>
           <ol className="list-decimal list-inside space-y-1">
             <li>話者（発信元の本部）を選択</li>
-            <li>「監視開始」をクリック</li>
-            <li>話し始めると自動で録音開始（プリロールで話し始め前の音声も含む）</li>
-            <li>
-              無音が{Math.round(vad.silenceDurationMs / 100) / 10}秒続くか、
-              最大{Math.round(vad.maxRecordingDurationMs / 1000)}秒で自動送信
-            </li>
-            <li>クロノロジーに自動登録されます</li>
+            <li>ボタンを押している間（またはSpaceキー長押し中）だけ録音</li>
+            <li>ボタン/Spaceを離すと送信</li>
+            <li>クロノロジーに登録されます</li>
           </ol>
           <div className="mt-3 text-blue-600 space-y-1">
-            <p>※ 監視中は連続で会話を検知・処理します</p>
-            <p className="text-xs">※ 音声が切れる場合は「高感度」プリセットを試すか、プリロール/ポストロールを増やしてください</p>
+            <p>※ 管理用途のため「自動検知（VAD）」ではなく、明示操作での録音にしています</p>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function VadSlider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  disabled,
-  suffix,
-  hint,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  disabled: boolean;
-  suffix?: string;
-  hint?: string;
-  onChange: (value: number) => void;
-}) {
-  const display = `${value}${suffix ?? ' dB'}`;
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-xs font-semibold text-gray-700">{label}</div>
-        <div className="text-xs font-mono text-gray-600">{display}</div>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-2 w-full"
-      />
-      {hint && <div className="mt-1 text-[11px] text-gray-500">{hint}</div>}
     </div>
   );
 }

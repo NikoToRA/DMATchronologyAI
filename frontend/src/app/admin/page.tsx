@@ -151,7 +151,14 @@ export default function SessionsPage() {
   });
 
   const departmentSessions = useMemo(() => {
-    return (sessionsInIncident ?? []).filter((s) => s.session_kind !== 'extra');
+    const ORDER = ['activity_command', 'transport_coordination', 'info_analysis', 'logistics_support'];
+    return (sessionsInIncident ?? [])
+      .filter((s) => s.session_kind !== 'extra')
+      .sort((a, b) => {
+        const aIndex = ORDER.indexOf(a.session_kind || '');
+        const bIndex = ORDER.indexOf(b.session_kind || '');
+        return aIndex - bIndex;
+      });
   }, [sessionsInIncident]);
 
   const extraSessions = useMemo(() => {
@@ -448,9 +455,6 @@ function IncidentSessionsPanel({
                 <div className="text-lg font-semibold text-gray-900 mt-0.5">{s.title}</div>
                 <div className="mt-3 flex items-center gap-2">
                   <Button onClick={() => router.push(`/sessions/${s.session_id}/chronology`)}>クロノロジー</Button>
-                  <Button variant="secondary" onClick={() => router.push(`/sessions/${s.session_id}/participants`)}>
-                    Zoom参加者
-                  </Button>
                 </div>
               </div>
             ))}
@@ -470,9 +474,6 @@ function IncidentSessionsPanel({
                 <div className="text-lg font-semibold text-gray-900 mt-0.5">{s.title}</div>
                 <div className="mt-3 flex items-center gap-2">
                   <Button onClick={() => router.push(`/sessions/${s.session_id}/chronology`)}>クロノロジー</Button>
-                  <Button variant="secondary" onClick={() => router.push(`/sessions/${s.session_id}/participants`)}>
-                    Zoom参加者
-                  </Button>
                 </div>
               </div>
             ))}
