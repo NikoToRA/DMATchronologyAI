@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Package, AlertCircle, Building2 } from 'lucide-react';
-import { incidentsApi, sessionHqApi, api, Incident, Participant, HQMaster } from '@/lib/api';
+import { incidentsApi, sessionHqApi, api, Participant } from '@/lib/api';
 
 const INCIDENT_NAME = '2026年DMAT関東ブロック訓練_物資支援';
 
@@ -12,95 +12,101 @@ export default function BusshiLoginPage() {
   const router = useRouter();
   const [selectedHqId, setSelectedHqId] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Fetch incidents and find the target one
-  const { data: incidents, isLoading: isLoadingIncidents } = useQuery({
+  // Fetch active incidents
+  const { data: incidents, isLoading: isLoadingIncidents, error: incidentsError } = useQuery({
     queryKey: ['incidents'],
-    queryFn: () => incidentsApi.list().then((res) => res.data),
+    queryFn: async () => {
+      const res = await incidentsApi.list();
+      return res.data;
+    },
   });
 
   // Find the target incident
-  const targetIncident = useMemo(() => {
-    return incidents?.find(
-      (inc) => inc.incident_name === INCIDENT_NAME && inc.status === 'active'
-    );
-  }, [incidents]);
+  const targetIncident = incidents?.find(
+    (inc) => inc.incident_name === INCIDENT_NAME && inc.status === 'active'
+  );
 
   // Get logistics_support session ID
-  const sessionId = useMemo(() => {
-    return targetIncident?.sessions?.logistics_support || null;
-  }, [targetIncident]);
+  const sessionId = targetIncident?.sessions?.logistics_support || null;
 
   // Fetch HQ list for the session
   const { data: hqList, isLoading: isLoadingHq } = useQuery({
     queryKey: ['session-hq', sessionId],
-    queryFn: () => sessionHqApi.list(sessionId!).then((res) => res.data),
+    queryFn: async () => {
+      const res = await sessionHqApi.list(sessionId!);
+      return res.data;
+    },
     enabled: !!sessionId,
   });
 
   // Active HQs only
-  const activeHqList = useMemo(() => {
-    return (hqList ?? []).filter((hq) => hq.active);
-  }, [hqList]);
+  const activeHqList = (hqList ?? []).filter((hq) => hq.active);
 
-  // Get the selected HQ name
-  const selectedHq = useMemo(() => {
-    return activeHqList.find((hq) => hq.hq_id === selectedHqId);
-  }, [activeHqList, selectedHqId]);
+  // Get the selected HQ
+  const selectedHq = activeHqList.find((hq) => hq.hq_id === selectedHqId);
 
-  // Register and navigate
-  const registerMutation = useMutation({
-    mutationFn: async ({ hqId, hqName }: { hqId: string; hqName: string }) => {
-      if (!sessionId) throw new Error('セッションが見つかりません');
+  // Handle submit
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
 
+    if (!selectedHqId || !selectedHq || !sessionId) {
+      setError('本部を選択してください');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
       const response = await api.post<Participant>(
         `/api/sessions/${sessionId}/participants`,
         {
-          zoom_display_name: hqName,
-          hq_id: hqId,
+          zoom_display_name: selectedHq.hq_name,
+          hq_id: selectedHqId,
         }
       );
-      return response.data;
-    },
-    onSuccess: (participant) => {
-      // Store session info in localStorage for the chronology page
+
       const busshiSession = {
         sessionId,
-        speakerName: selectedHq?.hq_name || '',
-        speakerId: participant.participant_id,
+        speakerName: selectedHq.hq_name,
+        speakerId: response.data.participant_id,
         hqId: selectedHqId,
         incidentName: INCIDENT_NAME,
       };
       localStorage.setItem('busshi_session', JSON.stringify(busshiSession));
       router.push('/user/busshi/session');
-    },
-    onError: (err: Error) => {
+    } catch (err: any) {
       setError(err.message || '入室に失敗しました');
-    },
-  });
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    if (!selectedHqId || !selectedHq) {
-      setError('本部を選択してください');
-      return;
+    } finally {
+      setIsSubmitting(false);
     }
-
-    registerMutation.mutate({
-      hqId: selectedHqId,
-      hqName: selectedHq.hq_name,
-    });
   };
-
-  const canSubmit = selectedHqId && !registerMutation.isPending;
 
   // Loading state
   if (isLoadingIncidents) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-white flex items-center justify-center">
         <div className="text-gray-500">読み込み中...</div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (incidentsError) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-white flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mb-4">
+            <AlertCircle className="h-8 w-8 text-red-600" />
+          </div>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">
+            エラーが発生しました
+          </h1>
+          <p className="text-gray-500 text-sm">
+            {String(incidentsError)}
+          </p>
+        </div>
       </div>
     );
   }
@@ -121,10 +127,15 @@ export default function BusshiLoginPage() {
             <br />
             管理者に連絡してください。
           </p>
+          <p className="text-xs text-gray-400 mt-4">
+            取得した災害数: {incidents?.length ?? 0}
+          </p>
         </div>
       </div>
     );
   }
+
+  const canSubmit = selectedHqId && !isSubmitting;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-white flex items-center justify-center p-4">
@@ -158,6 +169,8 @@ export default function BusshiLoginPage() {
               ) : activeHqList.length === 0 ? (
                 <div className="text-gray-500 text-sm py-4 text-center bg-gray-50 rounded-lg">
                   登録された本部がありません
+                  <br />
+                  <span className="text-xs">管理画面から本部を登録してください</span>
                 </div>
               ) : (
                 <div className="space-y-2 max-h-80 overflow-y-auto">
@@ -214,7 +227,7 @@ export default function BusshiLoginPage() {
               disabled={!canSubmit}
               className="w-full flex items-center justify-center gap-2 px-6 py-5 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold text-lg rounded-xl transition-all"
             >
-              {registerMutation.isPending ? (
+              {isSubmitting ? (
                 <>
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   入室中...
