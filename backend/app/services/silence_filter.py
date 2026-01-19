@@ -275,4 +275,6 @@ class SilenceFilter:
 
 
 # Singleton instance
-silence_filter = SilenceFilter()
+# Default threshold tuned for real-world browser/Zoom recordings where RMS can be very low.
+# (Example observed: -55.7dB for audible speech). Lower threshold = less aggressive silence skipping.
+silence_filter = SilenceFilter(silence_threshold_db=-60.0)

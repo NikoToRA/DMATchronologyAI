@@ -70,9 +70,18 @@ export class WebSocketClient {
     this.reconnectDelay = options.reconnectDelay ?? 1000;
     this.debug = options.debug ?? process.env.NODE_ENV === 'development';
 
-    // Build WebSocket URL
+    // Build WebSocket URL from API URL
     const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = process.env.NEXT_PUBLIC_WS_URL || 'localhost:8000';
+    // Derive WS host from API URL or use explicit WS URL
+    let wsHost = process.env.NEXT_PUBLIC_WS_URL || 'localhost:8000';
+    if (!process.env.NEXT_PUBLIC_WS_URL && process.env.NEXT_PUBLIC_API_URL) {
+      try {
+        const apiUrl = new URL(process.env.NEXT_PUBLIC_API_URL);
+        wsHost = apiUrl.host;
+      } catch {
+        // Keep default
+      }
+    }
 
     this.url = sessionId
       ? `${wsProtocol}//${wsHost}/ws/${sessionId}`

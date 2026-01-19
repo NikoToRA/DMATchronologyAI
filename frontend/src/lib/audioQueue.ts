@@ -7,7 +7,49 @@
  * - Offline detection and queue management
  */
 
-import { api } from './api';
+function getApiBaseUrl(): string {
+  // NEXT_PUBLIC_* is inlined at build time; fallback to same-origin.
+  return process.env.NEXT_PUBLIC_API_URL || '';
+}
+
+function formatFastApiErrorPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const anyPayload = payload as any;
+  if (typeof anyPayload.message === 'string' && anyPayload.message.trim()) return anyPayload.message;
+  const detail = anyPayload.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    // Typical FastAPI validation: [{ loc: [...], msg: "...", type: "..." }, ...]
+    const parts = detail
+      .map((d: any) => {
+        const loc = Array.isArray(d?.loc) ? d.loc.join('.') : d?.loc;
+        const msg = d?.msg ?? JSON.stringify(d);
+        return loc ? `${loc}: ${msg}` : String(msg);
+      })
+      .filter(Boolean);
+    return parts.length ? parts.join(' / ') : null;
+  }
+  return null;
+}
+
+function guessAudioExtension(mimeType: string | undefined): string {
+  const t = (mimeType || '').toLowerCase();
+  if (t.includes('audio/webm')) return 'webm';
+  if (t.includes('audio/wav') || t.includes('audio/wave') || t.includes('audio/x-wav')) return 'wav';
+  if (t.includes('audio/ogg')) return 'ogg';
+  if (t.includes('audio/mpeg') || t.includes('audio/mp3')) return 'mp3';
+  if (t.includes('audio/mp4') || t.includes('audio/x-m4a')) return 'm4a';
+  return 'webm';
+}
+
+function isLikelyCorruptWebmError(errorText: string): boolean {
+  const e = (errorText || '').toLowerCase();
+  return (
+    e.includes('ebml header parsing failed') ||
+    e.includes('invalid data found when processing input') ||
+    e.includes('decoding failed')
+  );
+}
 
 // =============================================================================
 // Types
@@ -24,6 +66,7 @@ export interface PendingSegment {
   startTime: string;
   endTime: string;
   createdAt: string;
+  lastAttemptAt: string;
   status: SegmentStatus;
   retryCount: number;
   lastError: string | null;
@@ -91,14 +134,16 @@ async function getDB(): Promise<IDBDatabase> {
  * Add a new audio segment to the queue
  */
 export async function addToQueue(
-  segment: Omit<PendingSegment, 'localId' | 'createdAt' | 'status' | 'retryCount' | 'lastError'>
+  segment: Omit<PendingSegment, 'localId' | 'createdAt' | 'lastAttemptAt' | 'status' | 'retryCount' | 'lastError'>
 ): Promise<PendingSegment> {
   const database = await getDB();
 
+  const now = new Date().toISOString();
   const newSegment: PendingSegment = {
     ...segment,
     localId: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    lastAttemptAt: now,
     status: 'pending',
     retryCount: 0,
     lastError: null,
@@ -164,6 +209,7 @@ export async function updateSegmentStatus(
       }
 
       segment.status = status;
+      segment.lastAttemptAt = new Date().toISOString();
       if (error) {
         segment.lastError = error;
       }
@@ -176,6 +222,39 @@ export async function updateSegmentStatus(
       putRequest.onerror = () => reject(new Error('Failed to update segment'));
     };
     getRequest.onerror = () => reject(new Error('Failed to get segment'));
+  });
+}
+
+/**
+ * Force-reset segments for retry (used for manual "retry all").
+ * - sets status to 'pending'
+ * - resets retryCount to 0
+ * - clears lastError
+ */
+export async function resetSegmentsForRetry(sessionId?: string): Promise<number> {
+  const database = await getDB();
+  const segments = await getPendingSegments(sessionId);
+  const toReset = segments.filter((s) => s.status !== 'pending');
+  if (toReset.length === 0) return 0;
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    let updated = 0;
+
+    transaction.oncomplete = () => resolve(updated);
+    transaction.onerror = () => reject(new Error('Failed to reset segments'));
+
+    for (const seg of toReset) {
+      seg.status = 'pending';
+      seg.retryCount = 0;
+      seg.lastError = null;
+      seg.lastAttemptAt = new Date().toISOString();
+      const req = store.put(seg);
+      req.onsuccess = () => {
+        updated += 1;
+      };
+    }
   });
 }
 
@@ -224,12 +303,47 @@ export async function getSegmentById(localId: string): Promise<PendingSegment | 
 /**
  * Retry uploading a specific segment by localId
  */
-export async function retrySegment(localId: string): Promise<UploadResult> {
+export async function retrySegment(localId: string, participantIdOverride?: string): Promise<UploadResult> {
   const segment = await getSegmentById(localId);
   if (!segment) {
     return { ok: false, error: 'Segment not found' };
   }
-  return uploadSegment(segment);
+  return uploadSegment(segment, participantIdOverride);
+}
+
+/**
+ * Rebind queued segments to a new participant_id.
+ * Useful when the user has re-registered in the current session and old segments
+ * still carry a participant_id from another session/login.
+ */
+export async function rebindSegmentsToParticipant(
+  sessionId: string,
+  participantId: string,
+  speakerName?: string
+): Promise<number> {
+  const database = await getDB();
+  const segments = await getPendingSegments(sessionId);
+  if (segments.length === 0) return 0;
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    let updated = 0;
+
+    transaction.oncomplete = () => resolve(updated);
+    transaction.onerror = () => reject(new Error('Failed to rebind segments'));
+
+    for (const seg of segments) {
+      if (seg.speakerId !== participantId || (speakerName && seg.speakerName !== speakerName)) {
+        seg.speakerId = participantId;
+        if (speakerName) seg.speakerName = speakerName;
+        const req = store.put(seg);
+        req.onsuccess = () => {
+          updated += 1;
+        };
+      }
+    }
+  });
 }
 
 /**
@@ -269,35 +383,80 @@ export async function cleanupOldSegments(): Promise<number> {
 /**
  * Upload a single segment to the server
  */
-export async function uploadSegment(segment: PendingSegment): Promise<UploadResult> {
+export async function uploadSegment(
+  segment: PendingSegment,
+  participantIdOverride?: string
+): Promise<UploadResult> {
   try {
     await updateSegmentStatus(segment.localId, 'uploading');
 
     const formData = new FormData();
-    formData.append('audio', segment.audioBlob, 'recording.webm');
-    formData.append('participant_id', segment.speakerId);
+    // Use filename extension that matches the actual Blob type.
+    // Backend prefers filename extension when detecting format.
+    const ext = guessAudioExtension(segment.audioBlob?.type);
+    formData.append('audio', segment.audioBlob, `recording.${ext}`);
+    const pid = participantIdOverride || segment.speakerId;
+    formData.append('participant_id', pid);
     formData.append('timestamp', segment.startTime);
 
-    const response = await api.post(
-      `/api/zoom/audio/${segment.sessionId}`,
-      formData,
-      {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 60000,
-      }
-    );
+    // Use fetch to avoid axios default JSON Content-Type interfering with multipart.
+    const baseUrl = getApiBaseUrl();
+    const url = `${baseUrl}/api/zoom/audio/${segment.sessionId}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
 
-    const result = response.data;
+    let result: any = null;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        signal: controller.signal,
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const body = isJson ? await res.json().catch(() => null) : await res.text().catch(() => '');
+
+      if (!res.ok) {
+        const formatted = formatFastApiErrorPayload(body);
+        const message =
+          formatted ||
+          (typeof body === 'string' && body ? body : '') ||
+          `Upload failed (HTTP ${res.status})`;
+        await updateSegmentStatus(segment.localId, 'failed', message);
+        return { ok: false, error: message };
+      }
+
+      result = body;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (result.ok) {
       await removeFromQueue(segment.localId);
       return { ok: true, entryId: result.entry_id };
     } else {
-      await updateSegmentStatus(segment.localId, 'failed', result.error || 'Processing failed');
-      return { ok: false, error: result.error || 'Processing failed' };
+      const stage = result.stage ? `stage=${result.stage}` : '';
+      const err = result.error || result.message || 'Processing failed';
+      const message = stage ? `${err} (${stage})` : err;
+
+      // If backend fails to decode/convert (common for corrupted blobs),
+      // this segment will never succeed and will keep clogging the queue.
+      // Remove it to unblock the rest.
+      if (result.stage === 'convert' && typeof err === 'string' && isLikelyCorruptWebmError(err)) {
+        await removeFromQueue(segment.localId);
+        return { ok: false, error: `音声ファイルが破損しているためスキップしました（キューから削除） (${stage || 'stage=convert'})` };
+      }
+
+      await updateSegmentStatus(segment.localId, 'failed', message);
+      return { ok: false, error: message };
     }
   } catch (err: any) {
-    const errorMessage = err.message || 'Upload failed';
+    const base =
+      err?.name === 'AbortError'
+        ? 'Upload timed out'
+        : err?.message || 'Upload failed';
+    const errorMessage = base;
     await updateSegmentStatus(segment.localId, 'failed', errorMessage);
     return { ok: false, error: errorMessage };
   }
@@ -305,24 +464,89 @@ export async function uploadSegment(segment: PendingSegment): Promise<UploadResu
 
 /**
  * Process the upload queue - upload all pending segments
+ * @param sessionId - Optional session ID to filter segments
+ * @param forceRetry - If true, skip delay checks and include stuck 'uploading' segments
  */
-export async function processQueue(sessionId?: string): Promise<{
+export async function processQueue(sessionId?: string, forceRetry = false): Promise<{
   success: number;
   failed: number;
 }> {
+  // Keep logs lightweight in production; enable by localStorage: debug_audio_queue=1
+  const debug =
+    process.env.NODE_ENV !== 'production' ||
+    (typeof window !== 'undefined' && window.localStorage?.getItem('debug_audio_queue') === '1');
+  if (debug) console.log('[AudioQueue] processQueue called:', { sessionId, forceRetry });
+
   const segments = await getPendingSegments(sessionId);
-  const pendingSegments = segments.filter(
-    (s) => s.status === 'pending' || (s.status === 'failed' && s.retryCount < MAX_RETRY_COUNT)
-  );
+  if (debug) {
+    console.log(
+      '[AudioQueue] Found segments:',
+      segments.length,
+      segments.map((s) => ({
+        id: s.localId?.substring?.(0, 8),
+        status: s.status,
+        retryCount: s.retryCount,
+        sessionId: s.sessionId?.substring?.(0, 8),
+      }))
+    );
+  }
+
+  const pendingSegments = segments.filter((s) => {
+    // Manual retry-all: try everything except already-uploaded (filtered out upstream).
+    if (forceRetry) return true;
+
+    // Always include pending segments
+    if (s.status === 'pending') {
+      if (debug) console.log('[AudioQueue] Including pending segment:', s.localId.substring(0, 8));
+      return true;
+    }
+
+    // Include failed segments (bypass max retry check if forceRetry)
+    if (s.status === 'failed') {
+      const include = s.retryCount < MAX_RETRY_COUNT;
+      if (debug) {
+        console.log(
+          '[AudioQueue] Failed segment:',
+          s.localId.substring(0, 8),
+          'retryCount:',
+          s.retryCount,
+          'include:',
+          include
+        );
+      }
+      return include;
+    }
+
+    // Include 'uploading' segments that have been stuck for more than 60 seconds
+    // (or immediately if forceRetry is true)
+    if (s.status === 'uploading') {
+      const lastAttempt = new Date(s.lastAttemptAt || s.createdAt).getTime();
+      const timeSinceLastAttempt = Date.now() - lastAttempt;
+      return timeSinceLastAttempt > 60000;
+    }
+
+    // Log unexpected status
+    if (debug) {
+      console.log(
+        '[AudioQueue] Excluding segment with unexpected status:',
+        s.localId.substring(0, 8),
+        'status:',
+        s.status
+      );
+    }
+    return false;
+  });
+
+  if (debug) console.log('[AudioQueue] Segments to process:', pendingSegments.length);
 
   let success = 0;
   let failed = 0;
 
   for (const segment of pendingSegments) {
-    // Check if we should wait before retry
-    if (segment.status === 'failed' && segment.retryCount > 0) {
+    // Check if we should wait before retry (skip if forceRetry)
+    if (!forceRetry && segment.status === 'failed' && segment.retryCount > 0) {
       const delay = RETRY_DELAYS[Math.min(segment.retryCount - 1, RETRY_DELAYS.length - 1)];
-      const lastAttempt = new Date(segment.createdAt).getTime();
+      const lastAttempt = new Date(segment.lastAttemptAt || segment.createdAt).getTime();
       const timeSinceLastAttempt = Date.now() - lastAttempt;
 
       if (timeSinceLastAttempt < delay) {
@@ -330,7 +554,9 @@ export async function processQueue(sessionId?: string): Promise<{
       }
     }
 
+    if (debug) console.log('[AudioQueue] Uploading segment:', segment.localId);
     const result = await uploadSegment(segment);
+    if (debug) console.log('[AudioQueue] Upload result:', segment.localId, result);
     if (result.ok) {
       success++;
     } else {
@@ -338,6 +564,7 @@ export async function processQueue(sessionId?: string): Promise<{
     }
   }
 
+  if (debug) console.log('[AudioQueue] processQueue complete:', { success, failed });
   return { success, failed };
 }
 

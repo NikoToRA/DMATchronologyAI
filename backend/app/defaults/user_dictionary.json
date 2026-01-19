@@ -1,0 +1,26 @@
+[
+  {
+    "entry_id": "c2b94b0a-285e-407e-8293-3714f4e07e8b",
+    "wrong_text": "ディーマット",
+    "correct_text": "DMAT",
+    "active": true
+  },
+  {
+    "entry_id": "f749b10c-382b-485d-a233-cd46352aed05",
+    "wrong_text": "Dマット",
+    "correct_text": "DMAT",
+    "active": true
+  },
+  {
+    "entry_id": "7f646ab1-3670-4b86-a895-908f534188ab",
+    "wrong_text": "Eミス",
+    "correct_text": "EMIS",
+    "active": true
+  },
+  {
+    "entry_id": "f4c6e3a7-4995-4537-a93f-50615f6caefc",
+    "wrong_text": "イーミス",
+    "correct_text": "EMIS",
+    "active": true
+  }
+]

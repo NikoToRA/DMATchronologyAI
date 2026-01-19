@@ -47,7 +47,7 @@ export function SessionHeader({
 function BackLink() {
   return (
     <Link
-      href="/"
+      href="/admin"
       className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700 mb-4"
     >
       <ArrowLeft className="h-4 w-4" />

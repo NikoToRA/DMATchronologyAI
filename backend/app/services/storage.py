@@ -8,7 +8,7 @@ chronology, and configuration data.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -48,6 +48,25 @@ class StorageWriteError(StorageError):
     """Exception raised when writing to storage fails."""
 
     pass
+
+
+def normalize_timestamp(dt: datetime) -> datetime:
+    """
+    Normalize a datetime to be timezone-aware (UTC).
+
+    This ensures that all timestamps can be compared even if some are
+    offset-naive and others are offset-aware.
+
+    Args:
+        dt: The datetime to normalize.
+
+    Returns:
+        A timezone-aware datetime in UTC.
+    """
+    if dt.tzinfo is None:
+        # Assume naive datetime is UTC
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 class StorageService:
@@ -518,7 +537,7 @@ class StorageService:
             sessions = await self._list_sessions_azure()
         else:
             sessions = await self._list_sessions_local()
-        return sorted(sessions, key=lambda s: s.start_at, reverse=True)
+        return sorted(sessions, key=lambda s: normalize_timestamp(s.start_at), reverse=True)
 
     async def _list_sessions_azure(self) -> List[Session]:
         """List sessions from Azure Blob Storage."""
@@ -815,7 +834,7 @@ class StorageService:
             data = await self._read_json(blob_name)
             if data:
                 segments.append(Segment(**data))
-        return sorted(segments, key=lambda s: s.timestamp)
+        return sorted(segments, key=lambda s: normalize_timestamp(s.timestamp))
 
     # ========== Chronology Operations ==========
 
@@ -858,7 +877,7 @@ class StorageService:
             data = await self._read_json(blob_name)
             if data:
                 entries.append(ChronologyEntry(**data))
-        return sorted(entries, key=lambda e: e.timestamp)
+        return sorted(entries, key=lambda e: normalize_timestamp(e.timestamp))
 
     async def update_chronology_entry(
         self, session_id: str, entry_id: str, updates: Dict[str, Any]
@@ -1278,6 +1297,26 @@ class StorageService:
 
     # ========== User Dictionary Operations ==========
 
+    _CONFIG_BLOB_PREFIX = "config"
+
+    async def _load_default_dictionary_entries(self) -> List[DictionaryEntry]:
+        """
+        Load bundled default dictionary entries (shipped with the backend image).
+        Used when running in Azure without a mounted /config directory.
+        """
+        try:
+            defaults_path = Path(__file__).resolve().parents[1] / "defaults" / "user_dictionary.json"
+            if not defaults_path.exists():
+                return []
+            async with aiofiles.open(defaults_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                data = json.loads(content)
+                if isinstance(data, list):
+                    return [DictionaryEntry(**entry) for entry in data]
+        except Exception as e:
+            logger.error(f"Failed to load default user dictionary: {e}")
+        return []
+
     async def get_dictionary_entries(self) -> List[DictionaryEntry]:
         """
         Get user dictionary entries for STT correction.
@@ -1285,10 +1324,31 @@ class StorageService:
         Returns:
             List of DictionaryEntry objects.
         """
+        # In Azure deployments, /app/config is not volume-mounted like local docker-compose.
+        # Persist config to the same storage backend as sessions (Azure Blob when enabled).
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/user_dictionary.json"
+            try:
+                data = await self._read_json(path)  # can be list
+                if isinstance(data, list):
+                    return [DictionaryEntry(**entry) for entry in data]
+                if data is None:
+                    # Seed from bundled defaults on first run
+                    defaults = await self._load_default_dictionary_entries()
+                    if defaults:
+                        await self._write_json(path, [e.model_dump() for e in defaults])  # type: ignore[arg-type]
+                        logger.info(f"Seeded user dictionary to storage with {len(defaults)} entries")
+                    return defaults
+            except Exception as e:
+                logger.error(f"Failed to read user dictionary from storage: {e}")
+                return []
+            return []
+
+        # Local/dev mode: keep using the mounted config directory.
         config_file = self.config_path / "user_dictionary.json"
         if not config_file.exists():
-            logger.debug("User dictionary config not found, returning empty list")
-            return []
+            logger.debug("User dictionary config not found, returning bundled defaults (or empty list)")
+            return await self._load_default_dictionary_entries()
         try:
             async with aiofiles.open(config_file, "r", encoding="utf-8") as f:
                 content = await f.read()
@@ -1309,11 +1369,19 @@ class StorageService:
         Raises:
             StorageWriteError: If saving fails.
         """
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/user_dictionary.json"
+            try:
+                await self._write_json(path, [e.model_dump() for e in entries])  # type: ignore[arg-type]
+                logger.info(f"Saved user dictionary to storage with {len(entries)} entries")
+                return
+            except Exception as e:
+                logger.error(f"Failed to save user dictionary to storage: {e}")
+                raise StorageWriteError(f"Failed to save user dictionary: {e}") from e
+
         config_file = self.config_path / "user_dictionary.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
-        content = json.dumps(
-            [e.model_dump() for e in entries], ensure_ascii=False, indent=2
-        )
+        content = json.dumps([e.model_dump() for e in entries], ensure_ascii=False, indent=2)
         try:
             async with aiofiles.open(config_file, "w", encoding="utf-8") as f:
                 await f.write(content)

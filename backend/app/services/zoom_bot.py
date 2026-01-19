@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 import jwt
+import numpy as np
 
 from ..config import settings
 import io
@@ -391,6 +392,60 @@ class ZoomBotService:
             result.update({"stage": "silence", "rms_db": rms_db, "skipped": True})
             return result
         result["rms_db"] = rms_db
+
+        # If the signal is very low, apply normalization before STT to reduce NoMatch cases.
+        # This does NOT affect silence detection above (we want to keep that conservative).
+        def _normalize_wav_for_stt(wav_bytes: bytes, gain_db: float) -> tuple[bytes, float]:
+            try:
+                with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+                    channels = wf.getnchannels()
+                    sample_rate = wf.getframerate()
+                    sample_width = wf.getsampwidth()  # bytes
+                    nframes = wf.getnframes()
+                    frames = wf.readframes(nframes)
+
+                # Only handle 16-bit PCM safely
+                if sample_width != 2:
+                    return wav_bytes, 0.0
+
+                samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+                peak = float(np.max(np.abs(samples))) if samples.size else 0.0
+
+                # Prefer peak-normalization so short speech bursts aren't drowned by long silences.
+                # Bring peak up to ~0.6 full-scale; cap amplification to avoid extreme noise boosts.
+                desired_peak = 0.6 * 32767.0
+                peak_factor = (desired_peak / peak) if peak > 0 else 1.0
+
+                # Also apply an RMS-based gain hint (gain_db computed from rms_db) as a minimum,
+                # but still cap overall amplification.
+                rms_factor = float(10 ** (max(0.0, gain_db) / 20.0))
+
+                factor = min(20.0, max(rms_factor, peak_factor))
+                if factor <= 1.01:
+                    return wav_bytes, 0.0
+
+                boosted = np.clip(samples * factor, -32768, 32767).astype(np.int16)
+
+                out = io.BytesIO()
+                with wave.open(out, "wb") as wf_out:
+                    wf_out.setnchannels(channels)
+                    wf_out.setsampwidth(sample_width)
+                    wf_out.setframerate(sample_rate)
+                    wf_out.writeframes(boosted.tobytes())
+                applied_db = float(20.0 * np.log10(factor)) if factor > 0 else 0.0
+                return out.getvalue(), applied_db
+            except Exception:
+                return wav_bytes, 0.0
+
+        try:
+            # Target around -35dB RMS for STT; cap to +20x overall amplification to avoid severe noise boosts.
+            if rms_db < -45.0:
+                gain_db_hint = (-35.0 - float(rms_db))
+                wav_data, applied_db = _normalize_wav_for_stt(wav_data, gain_db_hint)
+                if applied_db > 0:
+                    result["gain_db_applied"] = applied_db
+        except Exception:
+            pass
         # WAV debug info (helps diagnose STT issues)
         try:
             with wave.open(io.BytesIO(wav_data), "rb") as wf:

@@ -175,7 +175,9 @@ export type UpdateZoomCredentialsPayload = Partial<Pick<ZoomCredentials, 'client
 
 /** Structured API error */
 export interface ApiErrorResponse {
-  message: string;
+  message?: string;
+  // FastAPI validation errors commonly return { detail: [...] } or { detail: "..." }
+  detail?: unknown;
   code?: string;
   details?: Record<string, unknown>;
 }
@@ -196,8 +198,28 @@ export class ApiError extends Error {
     const response = error.response;
     if (response) {
       const data = response.data;
+      // Try to extract meaningful message from FastAPI-style errors
+      let message: string | undefined = data?.message;
+      if (!message && data && typeof (data as any).detail !== 'undefined') {
+        const detail = (data as any).detail;
+        if (typeof detail === 'string') {
+          message = detail;
+        } else if (Array.isArray(detail)) {
+          // Typical shape: [{ loc: [...], msg: "...", type: "..." }, ...]
+          const parts = detail
+            .map((d: any) => {
+              const loc = Array.isArray(d?.loc) ? d.loc.join('.') : d?.loc;
+              const msg = d?.msg ?? JSON.stringify(d);
+              return loc ? `${loc}: ${msg}` : String(msg);
+            })
+            .filter(Boolean);
+          message = parts.join(' / ');
+        } else if (detail && typeof detail === 'object') {
+          message = JSON.stringify(detail);
+        }
+      }
       return new ApiError(
-        data?.message || error.message || 'Unknown error',
+        message || error.message || 'Unknown error',
         response.status,
         data?.code,
         data?.details

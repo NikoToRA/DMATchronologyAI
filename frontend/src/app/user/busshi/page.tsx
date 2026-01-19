@@ -1,0 +1,231 @@
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { Package, AlertCircle, Building2 } from 'lucide-react';
+import { incidentsApi, sessionHqApi, api, Incident, Participant, HQMaster } from '@/lib/api';
+
+const INCIDENT_NAME = '2026年DMAT関東ブロック訓練_物資支援';
+
+export default function BusshiLoginPage() {
+  const router = useRouter();
+  const [selectedHqId, setSelectedHqId] = useState<string>('');
+  const [error, setError] = useState<string>('');
+
+  // Fetch incidents and find the target one
+  const { data: incidents, isLoading: isLoadingIncidents } = useQuery({
+    queryKey: ['incidents'],
+    queryFn: () => incidentsApi.list().then((res) => res.data),
+  });
+
+  // Find the target incident
+  const targetIncident = useMemo(() => {
+    return incidents?.find(
+      (inc) => inc.incident_name === INCIDENT_NAME && inc.status === 'active'
+    );
+  }, [incidents]);
+
+  // Get logistics_support session ID
+  const sessionId = useMemo(() => {
+    return targetIncident?.sessions?.logistics_support || null;
+  }, [targetIncident]);
+
+  // Fetch HQ list for the session
+  const { data: hqList, isLoading: isLoadingHq } = useQuery({
+    queryKey: ['session-hq', sessionId],
+    queryFn: () => sessionHqApi.list(sessionId!).then((res) => res.data),
+    enabled: !!sessionId,
+  });
+
+  // Active HQs only
+  const activeHqList = useMemo(() => {
+    return (hqList ?? []).filter((hq) => hq.active);
+  }, [hqList]);
+
+  // Get the selected HQ name
+  const selectedHq = useMemo(() => {
+    return activeHqList.find((hq) => hq.hq_id === selectedHqId);
+  }, [activeHqList, selectedHqId]);
+
+  // Register and navigate
+  const registerMutation = useMutation({
+    mutationFn: async ({ hqId, hqName }: { hqId: string; hqName: string }) => {
+      if (!sessionId) throw new Error('セッションが見つかりません');
+
+      const response = await api.post<Participant>(
+        `/api/sessions/${sessionId}/participants`,
+        {
+          zoom_display_name: hqName,
+          hq_id: hqId,
+        }
+      );
+      return response.data;
+    },
+    onSuccess: (participant) => {
+      // Store session info in localStorage for the chronology page
+      const busshiSession = {
+        sessionId,
+        speakerName: selectedHq?.hq_name || '',
+        speakerId: participant.participant_id,
+        hqId: selectedHqId,
+        incidentName: INCIDENT_NAME,
+      };
+      localStorage.setItem('busshi_session', JSON.stringify(busshiSession));
+      router.push('/user/busshi/session');
+    },
+    onError: (err: Error) => {
+      setError(err.message || '入室に失敗しました');
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!selectedHqId || !selectedHq) {
+      setError('本部を選択してください');
+      return;
+    }
+
+    registerMutation.mutate({
+      hqId: selectedHqId,
+      hqName: selectedHq.hq_name,
+    });
+  };
+
+  const canSubmit = selectedHqId && !registerMutation.isPending;
+
+  // Loading state
+  if (isLoadingIncidents) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-white flex items-center justify-center">
+        <div className="text-gray-500">読み込み中...</div>
+      </div>
+    );
+  }
+
+  // No target incident found
+  if (!targetIncident) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-white flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mb-4">
+            <AlertCircle className="h-8 w-8 text-red-600" />
+          </div>
+          <h1 className="text-xl font-bold text-gray-900 mb-2">
+            災害が見つかりません
+          </h1>
+          <p className="text-gray-500 text-sm">
+            「{INCIDENT_NAME}」がアクティブではありません。
+            <br />
+            管理者に連絡してください。
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-yellow-50 to-white flex items-center justify-center p-4">
+      <div className="w-full max-w-md">
+        <div className="bg-white rounded-2xl shadow-xl p-8">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-20 h-20 bg-yellow-100 rounded-full mb-4">
+              <Package className="h-10 w-10 text-yellow-600" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-900">
+              物資支援班
+            </h1>
+            <p className="text-gray-500 mt-2 text-sm">
+              2026年DMAT関東ブロック訓練
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-6">
+            {/* HQ Selection */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                <Building2 className="inline h-4 w-4 mr-1" />
+                所属本部を選択
+              </label>
+
+              {isLoadingHq ? (
+                <div className="text-gray-500 text-sm py-4 text-center">
+                  本部リスト読み込み中...
+                </div>
+              ) : activeHqList.length === 0 ? (
+                <div className="text-gray-500 text-sm py-4 text-center bg-gray-50 rounded-lg">
+                  登録された本部がありません
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {activeHqList.map((hq) => (
+                    <label
+                      key={hq.hq_id}
+                      className={`flex items-center p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        selectedHqId === hq.hq_id
+                          ? 'border-yellow-500 bg-yellow-50'
+                          : 'border-gray-200 hover:border-yellow-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="hq"
+                        value={hq.hq_id}
+                        checked={selectedHqId === hq.hq_id}
+                        onChange={(e) => setSelectedHqId(e.target.value)}
+                        className="sr-only"
+                      />
+                      <div className="flex-1">
+                        <div className="font-semibold text-gray-900 text-lg">
+                          {hq.hq_name}
+                        </div>
+                      </div>
+                      <div
+                        className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+                          selectedHqId === hq.hq_id
+                            ? 'border-yellow-500 bg-yellow-500'
+                            : 'border-gray-300'
+                        }`}
+                      >
+                        {selectedHqId === hq.hq_id && (
+                          <div className="w-2.5 h-2.5 rounded-full bg-white" />
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Error Message */}
+            {error && (
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
+                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Submit Button */}
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="w-full flex items-center justify-center gap-2 px-6 py-5 bg-yellow-500 hover:bg-yellow-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold text-lg rounded-xl transition-all"
+            >
+              {registerMutation.isPending ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  入室中...
+                </>
+              ) : (
+                '入室する'
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
