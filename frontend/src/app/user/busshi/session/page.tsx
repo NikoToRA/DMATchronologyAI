@@ -555,25 +555,25 @@ export default function BusshiSessionPage() {
       </main>
 
       {/* フローティング録音ボタン - 右下固定 */}
-      <div className="fixed bottom-4 right-4 z-30 flex flex-col items-end gap-2">
+      <div className="fixed bottom-12 right-4 z-30 flex flex-col items-end gap-2">
         {/* エラーメッセージ */}
         {errorMessage && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-2 py-1 max-w-48 text-right shadow-lg">
+          <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 max-w-56 text-right shadow-lg">
             {errorMessage}
           </div>
         )}
 
         {/* 送信中インジケーター */}
         {sendingCount > 0 && (
-          <div className="flex items-center gap-1.5 text-xs text-gray-600 bg-white rounded-lg px-2 py-1 shadow-lg border">
-            <Loader2 className="h-3 w-3 animate-spin" />
+          <div className="flex items-center gap-2 text-sm text-gray-600 bg-white rounded-lg px-3 py-2 shadow-lg border">
+            <Loader2 className="h-4 w-4 animate-spin" />
             <span>
               {sendingPhase === 'ai' ? 'AI解析中' : '音声認識中'}
             </span>
           </div>
         )}
 
-        {/* 録音ボタン */}
+        {/* 録音ボタン - 大きめサイズ */}
         <button
           onMouseDown={startRecording}
           onMouseUp={stopRecording}
@@ -581,7 +581,7 @@ export default function BusshiSessionPage() {
           onTouchStart={startRecording}
           onTouchEnd={stopRecording}
           disabled={recordingState === 'sending'}
-          className={`px-4 py-3 rounded-xl font-bold text-sm shadow-lg transition-all ${
+          className={`px-8 py-5 rounded-2xl font-bold text-lg shadow-xl transition-all ${
             recordingState === 'recording'
               ? 'bg-red-500 text-white scale-105'
               : recordingState === 'sending'
@@ -590,17 +590,17 @@ export default function BusshiSessionPage() {
           }`}
         >
           {recordingState === 'recording' ? (
-            <span className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 bg-white rounded-full animate-pulse" />
+            <span className="flex items-center gap-3">
+              <span className="w-4 h-4 bg-white rounded-full animate-pulse" />
               {formatDuration(recordingDuration)}
             </span>
           ) : recordingState === 'sending' ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
+            <Loader2 className="h-8 w-8 animate-spin" />
           ) : (
-            <span className="flex items-center gap-2">
-              <Mic className="h-5 w-5" />
-              <span className="hidden sm:inline">発話</span>
-              <span className="text-xs opacity-75">(Space)</span>
+            <span className="flex items-center gap-3">
+              <Mic className="h-7 w-7" />
+              <span>発話</span>
+              <span className="text-sm opacity-75">(Space)</span>
             </span>
           )}
         </button>
