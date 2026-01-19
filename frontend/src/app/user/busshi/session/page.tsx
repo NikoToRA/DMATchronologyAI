@@ -15,7 +15,9 @@ import {
 import { useChronology, useChronologyAutoScroll } from '@/hooks';
 import {
   ChronologyEntryList,
+  ChronologyFilters,
 } from '@/components/chronology';
+import type { ChronologyCategory } from '@/lib/api';
 import {
   addToQueue,
   uploadSegment,
@@ -86,7 +88,31 @@ export default function BusshiSessionPage() {
     updateEntry,
     refetch,
     stats,
+    filters,
+    setFilters,
   } = useChronology(sessionId);
+
+  // Filter handlers
+  const handleCategoryChange = useCallback(
+    (category: ChronologyCategory | '') => {
+      setFilters({ category });
+    },
+    [setFilters]
+  );
+
+  const handleHqChange = useCallback(
+    (hqId: string) => {
+      setFilters({ hqId });
+    },
+    [setFilters]
+  );
+
+  const handleUnconfirmedOnlyChange = useCallback(
+    (unconfirmedOnly: boolean) => {
+      setFilters({ unconfirmedOnly });
+    },
+    [setFilters]
+  );
 
   const { scrollRef } = useChronologyAutoScroll(entries);
 
@@ -541,6 +567,19 @@ export default function BusshiSessionPage() {
         </div>
       </header>
 
+      {/* フィルター */}
+      <div className="sticky top-[60px] z-10 bg-white">
+        <div className="max-w-4xl mx-auto">
+          <ChronologyFilters
+            filters={filters}
+            participants={participants}
+            onCategoryChange={handleCategoryChange}
+            onHqChange={handleHqChange}
+            onUnconfirmedOnlyChange={handleUnconfirmedOnlyChange}
+          />
+        </div>
+      </div>
+
       {/* Chronology List - フルスクリーン */}
       <main className="flex-1 max-w-4xl mx-auto w-full pb-24">
         <ChronologyEntryList
@@ -573,7 +612,7 @@ export default function BusshiSessionPage() {
           </div>
         )}
 
-        {/* 録音ボタン - 大きめサイズ */}
+        {/* 録音ボタン - 特大サイズ */}
         <button
           onMouseDown={startRecording}
           onMouseUp={stopRecording}
@@ -581,7 +620,7 @@ export default function BusshiSessionPage() {
           onTouchStart={startRecording}
           onTouchEnd={stopRecording}
           disabled={recordingState === 'sending'}
-          className={`px-8 py-5 rounded-2xl font-bold text-lg shadow-xl transition-all ${
+          className={`px-14 py-8 rounded-3xl font-bold text-2xl shadow-2xl transition-all ${
             recordingState === 'recording'
               ? 'bg-red-500 text-white scale-105'
               : recordingState === 'sending'
@@ -590,17 +629,17 @@ export default function BusshiSessionPage() {
           }`}
         >
           {recordingState === 'recording' ? (
-            <span className="flex items-center gap-3">
-              <span className="w-4 h-4 bg-white rounded-full animate-pulse" />
+            <span className="flex items-center gap-4">
+              <span className="w-6 h-6 bg-white rounded-full animate-pulse" />
               {formatDuration(recordingDuration)}
             </span>
           ) : recordingState === 'sending' ? (
-            <Loader2 className="h-8 w-8 animate-spin" />
+            <Loader2 className="h-12 w-12 animate-spin" />
           ) : (
-            <span className="flex items-center gap-3">
-              <Mic className="h-7 w-7" />
+            <span className="flex items-center gap-4">
+              <Mic className="h-12 w-12" />
               <span>発話</span>
-              <span className="text-sm opacity-75">(Space)</span>
+              <span className="text-lg opacity-75">(Space)</span>
             </span>
           )}
         </button>
