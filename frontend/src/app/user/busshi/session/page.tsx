@@ -620,7 +620,7 @@ export default function BusshiSessionPage() {
           onTouchStart={startRecording}
           onTouchEnd={stopRecording}
           disabled={recordingState === 'sending'}
-          className={`px-14 py-8 rounded-3xl font-bold text-2xl shadow-2xl transition-all ${
+          className={`px-16 py-10 rounded-3xl font-bold text-3xl shadow-2xl transition-all ${
             recordingState === 'recording'
               ? 'bg-red-500 text-white scale-105'
               : recordingState === 'sending'
@@ -629,17 +629,17 @@ export default function BusshiSessionPage() {
           }`}
         >
           {recordingState === 'recording' ? (
-            <span className="flex items-center gap-4">
-              <span className="w-6 h-6 bg-white rounded-full animate-pulse" />
+            <span className="flex items-center gap-5">
+              <span className="w-7 h-7 bg-white rounded-full animate-pulse" />
               {formatDuration(recordingDuration)}
             </span>
           ) : recordingState === 'sending' ? (
-            <Loader2 className="h-12 w-12 animate-spin" />
+            <Loader2 className="h-14 w-14 animate-spin" />
           ) : (
-            <span className="flex items-center gap-4">
-              <Mic className="h-12 w-12" />
+            <span className="flex items-center gap-5">
+              <Mic className="h-14 w-14" />
               <span>発話</span>
-              <span className="text-lg opacity-75">(Space)</span>
+              <span className="text-xl opacity-75">(Space)</span>
             </span>
           )}
         </button>
