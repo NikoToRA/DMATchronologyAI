@@ -152,14 +152,18 @@ class SilenceFilter:
         """
         Determine if audio data is silence.
 
+        Uses chunk-based analysis to detect if there's ANY speech in the recording.
+        This ensures that recordings with pauses (えーと, あー, etc.) are not
+        discarded as long as there's speech somewhere in the recording.
+
         Args:
             audio_data: Audio bytes to analyze.
             audio_format: Audio format - "wav" or "raw". Default "wav".
 
         Returns:
             Tuple of (is_silence, rms_db):
-                - is_silence: True if audio is silent or too short.
-                - rms_db: RMS level in decibels.
+                - is_silence: True if audio is completely silent (no speech anywhere).
+                - rms_db: Peak RMS level in decibels (highest chunk).
 
         Note:
             Returns (False, 0.0) if pydub is unavailable to avoid
@@ -182,18 +186,50 @@ class SilenceFilter:
                 )
                 return True, self._SILENCE_RMS_DB
 
-            # Calculate RMS
+            # Chunk-based analysis: check 500ms chunks for any speech
+            # If ANY chunk has speech above threshold, keep the recording
+            chunk_size_ms = 500
             samples = np.array(audio.get_array_of_samples())
             normalized = self._normalize_audio(samples)
-            rms = self._calculate_rms(normalized)
-            rms_db = self._rms_to_db(rms)
 
-            is_silent = rms_db < self.silence_threshold_db
+            # Calculate samples per chunk
+            samples_per_chunk = int(self.sample_rate * chunk_size_ms / 1000)
+
+            peak_rms_db = self._SILENCE_RMS_DB
+            has_speech = False
+
+            for i in range(0, len(normalized), samples_per_chunk):
+                chunk = normalized[i:i + samples_per_chunk]
+                if len(chunk) < samples_per_chunk // 4:  # Skip very small final chunks
+                    continue
+
+                chunk_rms = self._calculate_rms(chunk)
+                chunk_rms_db = self._rms_to_db(chunk_rms)
+
+                # Track peak RMS
+                if chunk_rms_db > peak_rms_db:
+                    peak_rms_db = chunk_rms_db
+
+                # If any chunk has speech above threshold, mark as having speech
+                if chunk_rms_db >= self.silence_threshold_db:
+                    has_speech = True
+                    # Don't break early - continue to get accurate peak_rms_db
+
+            # Also check overall RMS as fallback
+            overall_rms = self._calculate_rms(normalized)
+            overall_rms_db = self._rms_to_db(overall_rms)
+            if overall_rms_db > peak_rms_db:
+                peak_rms_db = overall_rms_db
+            if overall_rms_db >= self.silence_threshold_db:
+                has_speech = True
+
+            is_silent = not has_speech
             logger.debug(
-                f"Silence check: RMS={rms_db:.1f}dB, threshold={self.silence_threshold_db}dB, "
+                f"Silence check (chunk-based): peak_RMS={peak_rms_db:.1f}dB, "
+                f"threshold={self.silence_threshold_db}dB, has_speech={has_speech}, "
                 f"is_silent={is_silent}"
             )
-            return is_silent, rms_db
+            return is_silent, peak_rms_db
 
         except Exception as e:
             # On error, assume not silent to avoid dropping valid audio
