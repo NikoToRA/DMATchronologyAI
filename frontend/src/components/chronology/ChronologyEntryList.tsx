@@ -28,7 +28,9 @@ export function ChronologyEntryList({
   participants,
   sessionId,
 }: ChronologyEntryListProps) {
-  if (isLoading) {
+  // データがある場合は読み込み中でも表示（バックグラウンド更新時にUIが消えない）
+  // 初回読み込み時（データなし）のみローディング表示
+  if (isLoading && (!entries || entries.length === 0)) {
     return (
       <div className="flex-1 overflow-auto bg-gray-50 p-4">
         <LoadingPlaceholder />

@@ -166,6 +166,8 @@ export function useChronology(
   }, [filters]);
 
   // Fetch chronology entries
+  // staleTime: データが古いとみなされるまでの時間（再取得を抑制）
+  // placeholderData: 再取得中も前のデータを表示し続ける
   const entriesQuery = useQuery({
     queryKey: chronologyQueryKeys.list(sessionId, apiParams),
     queryFn: async () => {
@@ -174,6 +176,8 @@ export function useChronology(
     },
     enabled: !!sessionId,
     refetchInterval: enableWebSocket ? undefined : pollingInterval,
+    staleTime: 30000, // 30秒間はキャッシュを新鮮とみなす
+    gcTime: 5 * 60 * 1000, // 5分間キャッシュを保持
   });
 
   // Fetch session info
@@ -184,6 +188,8 @@ export function useChronology(
       return response.data;
     },
     enabled: !!sessionId,
+    staleTime: 60000, // 1分間はキャッシュを新鮮とみなす
+    gcTime: 5 * 60 * 1000,
   });
 
   // Fetch participants (Zoom participants list for this session)
@@ -194,6 +200,8 @@ export function useChronology(
       return response.data;
     },
     enabled: !!sessionId,
+    staleTime: 30000,
+    gcTime: 5 * 60 * 1000,
   });
 
   // Fetch HQ master
@@ -204,6 +212,8 @@ export function useChronology(
       return response.data;
     },
     enabled: !!sessionId,
+    staleTime: 60000,
+    gcTime: 5 * 60 * 1000,
   });
 
   // Update entry mutation
