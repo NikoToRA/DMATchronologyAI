@@ -606,3 +606,125 @@ class WSMessage(BaseSchema):
         ...,
         description="Message payload",
     )
+
+
+# ========== Chat Models ==========
+class ChatMessageRole(str, Enum):
+    """Role of a chat message."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+class ChatMessage(BaseSchema, TimestampMixin):
+    """Chat message model."""
+
+    message_id: str = Field(
+        default_factory=generate_uuid,
+        description="Unique message identifier",
+    )
+    thread_id: str = Field(
+        ...,
+        description="Parent thread identifier",
+    )
+    role: ChatMessageRole = Field(
+        ...,
+        description="Message role (user/assistant/system)",
+    )
+    content: str = Field(
+        ...,
+        description="Message content",
+    )
+    timestamp: datetime = Field(
+        default_factory=utc_now,
+        description="Message timestamp",
+    )
+    chronology_snapshot: Optional[list[str]] = Field(
+        default=None,
+        description="List of entry IDs referenced at time of message",
+    )
+
+
+class ChatThread(BaseSchema, TimestampMixin):
+    """Chat thread model."""
+
+    thread_id: str = Field(
+        default_factory=generate_uuid,
+        description="Unique thread identifier",
+    )
+    session_id: str = Field(
+        ...,
+        description="Parent session identifier",
+    )
+    creator_hq_id: str = Field(
+        ...,
+        description="HQ ID of thread creator",
+    )
+    creator_hq_name: str = Field(
+        ...,
+        description="HQ name of thread creator (for display)",
+    )
+    title: str = Field(
+        default="新規相談",
+        description="Thread title (auto-generated from first message)",
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        description="Thread creation timestamp",
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        description="Last update timestamp",
+    )
+    messages: list[ChatMessage] = Field(
+        default_factory=list,
+        description="Messages in this thread",
+    )
+
+
+class ChatThreadSummary(BaseSchema):
+    """Summary of a chat thread (for list view)."""
+
+    thread_id: str = Field(..., description="Thread identifier")
+    session_id: str = Field(..., description="Session identifier")
+    creator_hq_id: str = Field(..., description="Creator HQ ID")
+    creator_hq_name: str = Field(..., description="Creator HQ name")
+    title: str = Field(..., description="Thread title")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    message_count: int = Field(default=0, description="Number of messages")
+    can_write: bool = Field(
+        default=False,
+        description="Whether requesting user can write to this thread",
+    )
+
+
+class ChatThreadCreate(BaseSchema):
+    """Schema for creating a new chat thread."""
+
+    hq_id: str = Field(..., description="Creator's HQ ID")
+    hq_name: str = Field(..., description="Creator's HQ name")
+    message: str = Field(..., description="First message content")
+    include_chronology: bool = Field(
+        default=True,
+        description="Whether to include chronology context",
+    )
+
+
+class ChatMessageCreate(BaseSchema):
+    """Schema for sending a message to a thread."""
+
+    hq_id: str = Field(..., description="Sender's HQ ID (for authorization)")
+    message: str = Field(..., description="Message content")
+    include_chronology: bool = Field(
+        default=True,
+        description="Whether to include chronology context",
+    )
+
+
+class ChatThreadResponse(BaseSchema):
+    """Response for thread detail."""
+
+    thread: ChatThread = Field(..., description="Thread with messages")
+    can_write: bool = Field(..., description="Whether user can write")

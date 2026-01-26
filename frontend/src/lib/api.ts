@@ -129,6 +129,63 @@ export interface DictionaryEntry {
 }
 
 // =============================================================================
+// Chat Types
+// =============================================================================
+
+/** Chat message role */
+export type ChatMessageRole = 'user' | 'assistant' | 'system';
+
+/** Chat message entity */
+export interface ChatMessage {
+  readonly message_id: string;
+  readonly thread_id: string;
+  role: ChatMessageRole;
+  content: string;
+  readonly timestamp: string;
+  readonly chronology_snapshot?: string[] | null;
+}
+
+/** Chat thread entity */
+export interface ChatThread {
+  readonly thread_id: string;
+  readonly session_id: string;
+  readonly creator_hq_id: string;
+  readonly creator_hq_name: string;
+  title: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+  messages: ChatMessage[];
+}
+
+/** Chat thread summary (for list view) */
+export interface ChatThreadSummary {
+  readonly thread_id: string;
+  readonly session_id: string;
+  readonly creator_hq_id: string;
+  readonly creator_hq_name: string;
+  title: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly message_count: number;
+  readonly can_write: boolean;
+}
+
+/** Chat thread creation payload */
+export interface CreateChatThreadPayload {
+  hq_id: string;
+  hq_name: string;
+  message: string;
+  include_chronology?: boolean;
+}
+
+/** Chat message creation payload */
+export interface SendChatMessagePayload {
+  hq_id: string;
+  message: string;
+  include_chronology?: boolean;
+}
+
+// =============================================================================
 // API Request/Response Types
 // =============================================================================
 
@@ -464,6 +521,54 @@ export const zoomApi = {
 
   /** Leave a Zoom meeting for a session */
   leave: (sessionId: string) => api.post<void>(`/api/zoom/leave/${sessionId}`),
+} as const;
+
+/**
+ * Chat API service
+ * Handles AI chat functionality
+ */
+export const chatApi = {
+  /** List chat threads for a session */
+  listThreads: (sessionId: string, hqId: string) =>
+    api.get<ChatThreadSummary[]>(`/api/sessions/${sessionId}/chat/threads`, {
+      params: { hq_id: hqId },
+    }),
+
+  /** Get a specific thread with messages */
+  getThread: (sessionId: string, threadId: string, hqId: string) =>
+    api.get<{ thread: ChatThread; can_write: boolean }>(
+      `/api/sessions/${sessionId}/chat/threads/${threadId}`,
+      { params: { hq_id: hqId } }
+    ),
+
+  /** Create a new chat thread */
+  createThread: (sessionId: string, data: CreateChatThreadPayload) =>
+    api.post<{
+      thread: {
+        id: string;
+        creator_hq_id: string;
+        creator_hq_name: string;
+        title: string;
+        can_write: boolean;
+      };
+      message: {
+        id: string;
+        role: string;
+        content: string;
+        timestamp: string;
+      };
+    }>(`/api/sessions/${sessionId}/chat/threads`, data),
+
+  /** Send a message to a thread */
+  sendMessage: (sessionId: string, threadId: string, data: SendChatMessagePayload) =>
+    api.post<{
+      message: {
+        id: string;
+        role: string;
+        content: string;
+        timestamp: string;
+      };
+    }>(`/api/sessions/${sessionId}/chat/threads/${threadId}/messages`, data),
 } as const;
 
 // =============================================================================

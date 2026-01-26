@@ -18,6 +18,8 @@ from azure.storage.blob.aio import BlobServiceClient, ContainerClient
 
 from ..config import settings
 from ..models.schemas import (
+    ChatMessage,
+    ChatThread,
     ChronologyEntry,
     DictionaryEntry,
     HQMaster,
@@ -1519,6 +1521,118 @@ class StorageService:
                 return True
         logger.warning(f"Dictionary entry not found for deletion: {entry_id}")
         return False
+
+    # ========== Chat Thread Operations ==========
+
+    async def get_chat_threads(self, session_id: str) -> List[ChatThread]:
+        """
+        Get all chat threads for a session.
+
+        Args:
+            session_id: The unique session identifier.
+
+        Returns:
+            List of ChatThread objects sorted by updated_at descending.
+        """
+        prefix = f"{session_id}/chat/"
+        blob_names = await self._list_blobs(prefix)
+        threads: List[ChatThread] = []
+        for blob_name in blob_names:
+            if blob_name.endswith(".json"):
+                data = await self._read_json(blob_name)
+                if data:
+                    try:
+                        threads.append(ChatThread(**data))
+                    except Exception as e:
+                        logger.error(f"Failed to parse chat thread {blob_name}: {e}")
+        return sorted(
+            threads,
+            key=lambda t: normalize_timestamp(t.updated_at),
+            reverse=True,
+        )
+
+    async def get_chat_thread(
+        self, session_id: str, thread_id: str
+    ) -> Optional[ChatThread]:
+        """
+        Get a specific chat thread by ID.
+
+        Args:
+            session_id: The unique session identifier.
+            thread_id: The unique thread identifier.
+
+        Returns:
+            ChatThread if found, None otherwise.
+        """
+        path = f"{session_id}/chat/{thread_id}.json"
+        data = await self._read_json(path)
+        if data:
+            try:
+                return ChatThread(**data)
+            except Exception as e:
+                logger.error(f"Failed to parse chat thread {thread_id}: {e}")
+        return None
+
+    async def save_chat_thread(
+        self, session_id: str, thread: ChatThread
+    ) -> ChatThread:
+        """
+        Save a chat thread (create or update).
+
+        Args:
+            session_id: The unique session identifier.
+            thread: The ChatThread object to save.
+
+        Returns:
+            The saved ChatThread object.
+        """
+        path = f"{session_id}/chat/{thread.thread_id}.json"
+        logger.debug(f"Saving chat thread: {thread.thread_id}")
+        await self._write_json(path, thread.model_dump())
+        return thread
+
+    async def delete_chat_thread(self, session_id: str, thread_id: str) -> bool:
+        """
+        Delete a chat thread.
+
+        Args:
+            session_id: The unique session identifier.
+            thread_id: The unique thread identifier.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+        path = f"{session_id}/chat/{thread_id}.json"
+        try:
+            await self._delete_blob(path)
+            logger.info(f"Deleted chat thread: {thread_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete chat thread {thread_id}: {e}")
+            return False
+
+    async def add_message_to_thread(
+        self, session_id: str, thread_id: str, message: ChatMessage
+    ) -> Optional[ChatThread]:
+        """
+        Add a message to an existing thread.
+
+        Args:
+            session_id: The unique session identifier.
+            thread_id: The unique thread identifier.
+            message: The ChatMessage to add.
+
+        Returns:
+            The updated ChatThread if found, None otherwise.
+        """
+        thread = await self.get_chat_thread(session_id, thread_id)
+        if thread is None:
+            logger.warning(f"Chat thread not found: {thread_id}")
+            return None
+
+        thread.messages.append(message)
+        thread.updated_at = datetime.now(timezone.utc)
+        return await self.save_chat_thread(session_id, thread)
 
     # ========== Cleanup ==========
 

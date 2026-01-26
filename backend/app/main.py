@@ -3,7 +3,7 @@ from datetime import date
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import sessions, participants, chronology, settings, zoom, session_hq, incidents
+from .api import sessions, participants, chronology, settings, zoom, session_hq, incidents, chat
 from .websocket.manager import connection_manager
 from .services.storage import storage_service
 from .config import settings as app_settings
@@ -99,6 +99,7 @@ app.include_router(chronology.router, prefix="/api")
 app.include_router(session_hq.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(zoom.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
 
 
 @app.get("/")

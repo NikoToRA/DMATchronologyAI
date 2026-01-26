@@ -11,7 +11,9 @@ import {
   Loader2,
   LogOut,
   Package,
+  MessageSquare,
 } from 'lucide-react';
+import { AIChatPanel } from '@/components/chat';
 import { useChronology, useChronologyAutoScroll } from '@/hooks';
 import {
   ChronologyEntryList,
@@ -69,6 +71,7 @@ export default function BusshiSessionPage() {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [sendingPhase, setSendingPhase] = useState<'stt' | 'ai' | null>(null);
   const sendingPhaseTimeoutRef = useRef<number | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
 
   // Refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -556,6 +559,14 @@ export default function BusshiSessionPage() {
                 {isOnline ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
               </div>
               <button
+                onClick={() => setIsChatOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-blue-600 hover:bg-blue-700 transition-colors"
+                title="AIチャット"
+              >
+                <MessageSquare className="h-4 w-4" />
+                <span className="hidden sm:inline">AI相談</span>
+              </button>
+              <button
                 onClick={handleLogout}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-yellow-600 hover:bg-yellow-700 transition-colors"
                 title="ログアウト"
@@ -651,6 +662,15 @@ export default function BusshiSessionPage() {
           全{stats.total}件
         </div>
       </div>
+
+      {/* AI Chat Panel */}
+      <AIChatPanel
+        isOpen={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        sessionId={sessionId}
+        hqId={busshiSession.hqId}
+        hqName={busshiSession.speakerName}
+      />
     </div>
   );
 }
