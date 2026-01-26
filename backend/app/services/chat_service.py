@@ -6,8 +6,11 @@ Enables users to discuss chronology entries with an AI assistant.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+# 日本標準時 (JST = UTC+9)
+JST = timezone(timedelta(hours=9))
 
 from openai import AsyncAzureOpenAI, APIError, APIConnectionError, RateLimitError
 
@@ -129,7 +132,15 @@ class ChatService:
 
         lines = ["## クロノロジー（直近の活動記録）"]
         for entry in sorted_entries:
-            timestamp_str = entry.timestamp.strftime("%H:%M") if entry.timestamp else "??:??"
+            if entry.timestamp:
+                # UTCからJSTに変換
+                ts = entry.timestamp
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                ts_jst = ts.astimezone(JST)
+                timestamp_str = ts_jst.strftime("%m/%d %H:%M")
+            else:
+                timestamp_str = "??/?? ??:??"
             hq_name = getattr(entry, 'hq_name', None) or "不明"
             lines.append(
                 f"- [{timestamp_str}] [{entry.category.value}] ({hq_name}) {entry.summary}"
