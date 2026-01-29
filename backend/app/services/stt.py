@@ -9,8 +9,9 @@ import asyncio
 import io
 import json
 import logging
+import threading
 import wave
-from typing import Any, AsyncIterator, Callable, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, List, Optional, Tuple
 
 from ..config import settings
 from .audio_converter import audio_converter, AudioConversionError
@@ -105,8 +106,37 @@ class STTService:
                 self._speech_config.speech_recognition_language = self.DEFAULT_LANGUAGE
                 # Enable detailed output for confidence scores
                 self._speech_config.output_format = speechsdk.OutputFormat.Detailed
+
+                # Disable silence-based segmentation to process entire audio
+                # User controls start/end via recording button, not silence detection
+                # Set very long timeouts (10 minutes = 600000ms) to effectively disable
+                self._speech_config.set_property(
+                    speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
+                    "600000"
+                )
+                self._speech_config.set_property(
+                    speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs,
+                    "600000"
+                )
+                # Also extend initial silence timeout for delayed speech start
+                self._speech_config.set_property(
+                    speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs,
+                    "600000"
+                )
+                # Use time-based segmentation instead of silence-based
+                # This prevents early termination due to pauses in speech
+                self._speech_config.set_property_by_name(
+                    "Speech_SegmentationStrategy",
+                    "Time"
+                )
+                # Set segment size to 10 minutes (maximum practical length)
+                self._speech_config.set_property_by_name(
+                    "Speech_SegmentationMaximumTimeMs",
+                    "600000"
+                )
                 logger.debug(
-                    f"Speech config initialized with language: {self.DEFAULT_LANGUAGE}"
+                    f"Speech config initialized with language: {self.DEFAULT_LANGUAGE}, "
+                    "silence timeouts disabled (user-controlled recording)"
                 )
             except Exception as e:
                 logger.error(f"Failed to create speech config: {e}")
@@ -184,7 +214,10 @@ class STTService:
         speech_config: Any,
     ) -> Tuple[str, float]:
         """
-        Perform synchronous speech recognition.
+        Perform synchronous speech recognition using continuous recognition.
+
+        Uses continuous recognition to capture all speech in the audio,
+        including speech after silence periods.
 
         Args:
             audio_data: Audio bytes to transcribe.
@@ -209,8 +242,6 @@ class STTService:
                 channels=channels,
             )
             audio_stream = speechsdk.audio.PushAudioInputStream(stream_format=stream_format)
-            audio_stream.write(frames)
-            audio_stream.close()
 
             audio_config = speechsdk.audio.AudioConfig(stream=audio_stream)
             recognizer = speechsdk.SpeechRecognizer(
@@ -234,33 +265,94 @@ class STTService:
             except Exception:
                 pass
 
-            # Perform single-shot recognition
-            result = recognizer.recognize_once()
+            # Use continuous recognition to capture all speech (including after silence)
+            results: List[Tuple[str, float]] = []
+            done_event = threading.Event()
+            error_message: Optional[str] = None
 
-            if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                confidence = self._extract_confidence(result)
-                logger.debug(
-                    f"Transcription successful: {len(result.text)} chars, "
-                    f"confidence: {confidence:.2f}"
-                )
-                return result.text, confidence
+            def on_recognized(evt: Any) -> None:
+                """Collect recognized speech segments."""
+                if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    confidence = self._extract_confidence(evt.result)
+                    results.append((evt.result.text, confidence))
+                    logger.debug(
+                        f"Recognized segment: {len(evt.result.text)} chars, "
+                        f"confidence: {confidence:.2f}"
+                    )
 
-            elif result.reason == speechsdk.ResultReason.NoMatch:
-                no_match_details = speechsdk.NoMatchDetails(result)
-                logger.debug(f"No speech recognized: {no_match_details.reason}")
+            def on_canceled(evt: Any) -> None:
+                """Handle cancellation."""
+                nonlocal error_message
+                cancellation = speechsdk.CancellationDetails(evt.result)
+                if cancellation.reason == speechsdk.CancellationReason.Error:
+                    error_message = cancellation.error_details
+                    logger.warning(f"Recognition canceled: {error_message}")
+                done_event.set()
+
+            def on_session_stopped(evt: Any) -> None:
+                """Signal completion when session stops."""
+                logger.info(f"Recognition session stopped, collected {len(results)} segments")
+                done_event.set()
+
+            def on_session_started(evt: Any) -> None:
+                """Log when session starts."""
+                logger.info("Recognition session started")
+
+            def on_recognizing(evt: Any) -> None:
+                """Log intermediate recognition results (for debugging)."""
+                if evt.result.text:
+                    logger.debug(f"Recognizing (intermediate): {evt.result.text[:50]}...")
+
+            # Connect event handlers
+            recognizer.recognized.connect(on_recognized)
+            recognizer.canceled.connect(on_canceled)
+            recognizer.session_stopped.connect(on_session_stopped)
+            recognizer.session_started.connect(on_session_started)
+            recognizer.recognizing.connect(on_recognizing)
+
+            # Calculate audio duration for logging
+            audio_duration_sec = len(frames) / (sample_rate * sample_width * channels)
+            logger.info(
+                f"Starting recognition: {audio_duration_sec:.1f}s audio, "
+                f"{len(frames)} bytes, {sample_rate}Hz {bits_per_sample}bit {channels}ch"
+            )
+
+            # Start continuous recognition
+            recognizer.start_continuous_recognition()
+
+            # Push audio data and close stream to signal end
+            audio_stream.write(frames)
+            audio_stream.close()
+            logger.debug("Audio stream closed, waiting for recognition to complete")
+
+            # Wait for recognition to complete
+            # Timeout set to 10 minutes to handle long recordings
+            # (user controls recording duration via button, not silence detection)
+            if not done_event.wait(timeout=600.0):
+                logger.warning("Recognition timeout (10min) - stopping")
+                recognizer.stop_continuous_recognition()
+
+            # Stop recognition
+            recognizer.stop_continuous_recognition()
+
+            # Combine results
+            if not results:
+                if error_message:
+                    logger.warning(f"No speech recognized, error: {error_message}")
+                else:
+                    logger.debug("No speech recognized in audio")
                 return "", 0.0
 
-            elif result.reason == speechsdk.ResultReason.Canceled:
-                cancellation = speechsdk.CancellationDetails(result)
-                logger.warning(
-                    f"Recognition canceled: {cancellation.reason}, "
-                    f"error: {cancellation.error_details}"
-                )
-                return "", 0.0
+            # Concatenate all recognized text
+            combined_text = "".join(text for text, _ in results)
+            # Average confidence across all segments
+            avg_confidence = sum(conf for _, conf in results) / len(results)
 
-            else:
-                logger.warning(f"Unexpected recognition result: {result.reason}")
-                return "", 0.0
+            logger.debug(
+                f"Transcription complete: {len(results)} segments, "
+                f"{len(combined_text)} chars, avg confidence: {avg_confidence:.2f}"
+            )
+            return combined_text, avg_confidence
 
         except Exception as e:
             logger.error(f"STT transcription error: {e}", exc_info=True)
