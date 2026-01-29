@@ -107,32 +107,16 @@ class STTService:
                 # Enable detailed output for confidence scores
                 self._speech_config.output_format = speechsdk.OutputFormat.Detailed
 
-                # Disable silence-based segmentation to process entire audio
+                # Extend silence timeouts to prevent early termination during pauses
                 # User controls start/end via recording button, not silence detection
-                # Set very long timeouts (10 minutes = 600000ms) to effectively disable
-                self._speech_config.set_property(
-                    speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs,
-                    "600000"
-                )
+                # Note: Azure has max limits, so we use reasonable long values
                 self._speech_config.set_property(
                     speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs,
-                    "600000"
+                    "5000"  # 5 seconds end silence timeout
                 )
-                # Also extend initial silence timeout for delayed speech start
                 self._speech_config.set_property(
                     speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs,
-                    "600000"
-                )
-                # Use time-based segmentation instead of silence-based
-                # This prevents early termination due to pauses in speech
-                self._speech_config.set_property_by_name(
-                    "Speech_SegmentationStrategy",
-                    "Time"
-                )
-                # Set segment size to 10 minutes (maximum practical length)
-                self._speech_config.set_property_by_name(
-                    "Speech_SegmentationMaximumTimeMs",
-                    "600000"
+                    "15000"  # 15 seconds initial silence timeout
                 )
                 logger.debug(
                     f"Speech config initialized with language: {self.DEFAULT_LANGUAGE}, "
