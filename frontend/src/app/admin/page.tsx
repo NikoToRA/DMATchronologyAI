@@ -151,7 +151,7 @@ export default function SessionsPage() {
   });
 
   const departmentSessions = useMemo(() => {
-    const ORDER = ['activity_command', 'transport_coordination', 'info_analysis', 'logistics_support'];
+    const ORDER = ['activity_command', 'command_coordination', 'transport_coordination', 'info_analysis', 'logistics_support'];
     return (sessionsInIncident ?? [])
       .filter((s) => s.session_kind !== 'extra')
       .sort((a, b) => {
@@ -167,7 +167,7 @@ export default function SessionsPage() {
 
   const missingDepartmentKinds = useMemo(() => {
     if (!selectedIncident) return [];
-    const required = ['activity_command', 'transport_coordination', 'info_analysis', 'logistics_support'] as const;
+    const required = ['activity_command', 'command_coordination', 'transport_coordination', 'info_analysis', 'logistics_support'] as const;
     return required.filter((k) => !selectedIncident.sessions?.[k]);
   }, [selectedIncident]);
 
@@ -421,7 +421,8 @@ export default function SessionsPage() {
 
 function getSessionKindLabel(kind?: string): string {
   const labels: Record<string, string> = {
-    activity_command: '統括・調整班（活動指揮）',
+    activity_command: '活動指揮',
+    command_coordination: '統括・調整班',
     transport_coordination: '搬送調整班',
     info_analysis: '情報分析班',
     logistics_support: '物資支援班',

@@ -25,12 +25,14 @@ async def ensure_busshi_incident():
 
     kind_labels = {
         SessionKind.ACTIVITY_COMMAND: "活動指揮",
+        SessionKind.COMMAND_COORDINATION: "統括・調整",
         SessionKind.TRANSPORT_COORDINATION: "搬送調整",
         SessionKind.INFO_ANALYSIS: "情報分析",
         SessionKind.LOGISTICS_SUPPORT: "物資支援",
     }
     required_kinds = [
         SessionKind.ACTIVITY_COMMAND,
+        SessionKind.COMMAND_COORDINATION,
         SessionKind.TRANSPORT_COORDINATION, 
         SessionKind.INFO_ANALYSIS, 
         SessionKind.LOGISTICS_SUPPORT

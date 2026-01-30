@@ -48,6 +48,7 @@ class SessionKind(str, Enum):
     """Kind/type of session."""
 
     ACTIVITY_COMMAND = "activity_command"        # 活動指揮
+    COMMAND_COORDINATION = "command_coordination" # 統括・調整（新規分離）
     TRANSPORT_COORDINATION = "transport_coordination"  # 搬送調整
     INFO_ANALYSIS = "info_analysis"              # 情報分析
     LOGISTICS_SUPPORT = "logistics_support"      # 物資支援

@@ -28,8 +28,8 @@ export default function CommandLoginPage() {
         (inc) => inc.incident_name === INCIDENT_NAME && inc.status === 'active'
     );
 
-    // Get activity_command session ID (統括・調整班用として活動指揮セッションを使用)
-    const sessionId = targetIncident?.sessions?.activity_command || null;
+    // Get command_coordination session ID (統括・調整班専用セッションを使用)
+    const sessionId = targetIncident?.sessions?.command_coordination || null;
 
     // Fetch HQ list for the session
     const { data: hqList, isLoading: isLoadingHq } = useQuery({
