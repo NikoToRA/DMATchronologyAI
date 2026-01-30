@@ -24,6 +24,7 @@ router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 REQUIRED_DEPARTMENT_KINDS: tuple[SessionKind, ...] = (
     SessionKind.ACTIVITY_COMMAND,
+    SessionKind.COMMAND_COORDINATION,
     SessionKind.TRANSPORT_COORDINATION,
     SessionKind.INFO_ANALYSIS,
     SessionKind.LOGISTICS_SUPPORT,
@@ -40,6 +41,7 @@ async def _get_incident_or_raise(incident_id: str) -> Incident:
 def _kind_label(kind: SessionKind) -> str:
     return {
         SessionKind.ACTIVITY_COMMAND: "活動指揮",
+        SessionKind.COMMAND_COORDINATION: "統括・調整",
         SessionKind.TRANSPORT_COORDINATION: "搬送調整",
         SessionKind.INFO_ANALYSIS: "情報分析",
         SessionKind.LOGISTICS_SUPPORT: "物資支援",
