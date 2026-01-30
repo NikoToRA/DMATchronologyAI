@@ -41,3 +41,5 @@ htmlcov/
 
 # Docker
 *.log
+backend_config.json
+backend_config_check.json
