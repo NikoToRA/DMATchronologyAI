@@ -12,6 +12,8 @@ import {
     LogOut,
     Activity,
     MessageSquare,
+    Send,
+    Keyboard,
 } from 'lucide-react';
 import { AIChatPanel } from '@/components/chat';
 import { useChronology, useChronologyAutoScroll } from '@/hooks';
@@ -72,6 +74,9 @@ export default function CommandSessionPage() {
     const [sendingPhase, setSendingPhase] = useState<'stt' | 'ai' | null>(null);
     const sendingPhaseTimeoutRef = useRef<number | null>(null);
     const [isChatOpen, setIsChatOpen] = useState(false);
+    const [textInput, setTextInput] = useState('');
+    const [isTextSending, setIsTextSending] = useState(false);
+    const [showTextInput, setShowTextInput] = useState(false);
 
     // Refs
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -474,6 +479,30 @@ export default function CommandSessionPage() {
         router.push('/user/command');
     }, [router]);
 
+    // Text input submit handler
+    const handleTextSubmit = useCallback(async () => {
+        if (!textInput.trim() || !commandSession || isTextSending) return;
+
+        setIsTextSending(true);
+        setErrorMessage('');
+
+        try {
+            await chronologyApi.create(sessionId, {
+                text_raw: textInput.trim(),
+                participant_id: commandSession.speakerId,
+                timestamp: new Date().toISOString(),
+            });
+            setTextInput('');
+            // 即座にデータを再取得
+            await refetch();
+        } catch (err: any) {
+            console.error('Failed to submit text:', err);
+            setErrorMessage(err?.message || 'テキスト送信に失敗しました');
+        } finally {
+            setIsTextSending(false);
+        }
+    }, [textInput, commandSession, sessionId, isTextSending, refetch]);
+
     // ==========================================================================
     // Keyboard Event Handlers
     // ==========================================================================
@@ -655,6 +684,66 @@ export default function CommandSessionPage() {
                     )}
                 </button>
             </div>
+
+            {/* フローティングテキスト入力欄 */}
+            {showTextInput && (
+                <div className="fixed bottom-14 left-0 right-0 z-25 px-4">
+                    <div className="max-w-4xl mx-auto">
+                        <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 p-3">
+                            <div className="flex items-center gap-2 mb-2 text-xs text-gray-500">
+                                <Building2 className="h-3 w-3" />
+                                <span>{commandSession?.speakerName}</span>
+                                <span className="ml-auto">{new Date().toLocaleTimeString('ja-JP')}</span>
+                            </div>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    value={textInput}
+                                    onChange={(e) => setTextInput(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            handleTextSubmit();
+                                        }
+                                    }}
+                                    placeholder="テキストで記録を入力..."
+                                    className="flex-1 px-4 py-3 rounded-xl border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-base"
+                                    autoFocus
+                                    disabled={isTextSending}
+                                />
+                                <button
+                                    onClick={handleTextSubmit}
+                                    disabled={!textInput.trim() || isTextSending}
+                                    className="px-5 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl transition-all flex items-center gap-2"
+                                >
+                                    {isTextSending ? (
+                                        <Loader2 className="h-5 w-5 animate-spin" />
+                                    ) : (
+                                        <Send className="h-5 w-5" />
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => setShowTextInput(false)}
+                                    className="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-600 rounded-xl transition-all"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* キーボード入力トグルボタン */}
+            {!showTextInput && (
+                <button
+                    onClick={() => setShowTextInput(true)}
+                    className="fixed bottom-14 left-4 z-30 p-4 bg-white hover:bg-gray-100 text-gray-600 rounded-full shadow-lg border border-gray-200 transition-all"
+                    title="テキスト入力"
+                >
+                    <Keyboard className="h-6 w-6" />
+                </button>
+            )}
 
             {/* Simple Footer */}
             <div className="bg-white border-t border-gray-200 py-2 fixed bottom-0 left-0 right-0 z-20">
