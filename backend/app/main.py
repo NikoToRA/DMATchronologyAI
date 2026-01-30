@@ -15,12 +15,56 @@ BUSSHI_INCIDENT_DATE = date(2026, 1, 30)
 
 
 async def ensure_busshi_incident():
-    """物資支援班専用UIに必要な災害を作成（存在しない場合のみ）"""
+    """物資支援班専用UIに必要な災害を作成（存在しない場合のみ）、不足セッションがあれば追加"""
     existing = await storage_service.list_incidents()
+    target_incident = None
     for inc in existing:
         if inc.incident_name == BUSSHI_INCIDENT_NAME:
-            print(f"  Busshi incident already exists: {inc.incident_id}")
-            return inc
+            target_incident = inc
+            break
+
+    kind_labels = {
+        SessionKind.ACTIVITY_COMMAND: "活動指揮",
+        SessionKind.TRANSPORT_COORDINATION: "搬送調整",
+        SessionKind.INFO_ANALYSIS: "情報分析",
+        SessionKind.LOGISTICS_SUPPORT: "物資支援",
+    }
+    required_kinds = [
+        SessionKind.ACTIVITY_COMMAND,
+        SessionKind.TRANSPORT_COORDINATION, 
+        SessionKind.INFO_ANALYSIS, 
+        SessionKind.LOGISTICS_SUPPORT
+    ]
+
+    if target_incident:
+        print(f"  Busshi incident found: {target_incident.incident_id}")
+        
+        # 不足しているセッションを確認・作成
+        updated = False
+        current_sessions = target_incident.sessions or {}
+        
+        for kind in required_kinds:
+            if kind not in current_sessions:
+                print(f"    Missing session kind: {kind}. Creating...")
+                title = f"{BUSSHI_INCIDENT_NAME} {BUSSHI_INCIDENT_DATE.strftime('%Y/%m/%d')} {kind_labels[kind]}"
+                session = Session(
+                    title=title,
+                    session_kind=kind,
+                    incident_name=BUSSHI_INCIDENT_NAME,
+                    incident_date=BUSSHI_INCIDENT_DATE,
+                    incident_id=target_incident.incident_id,
+                    zoom_meeting_id=None,
+                )
+                created_session = await storage_service.create_session(session)
+                current_sessions[kind] = created_session.session_id
+                updated = True
+        
+        if updated:
+             # update_incidentには変更するフィールドのdictを渡す
+             await storage_service.update_incident(target_incident.incident_id, {"sessions": current_sessions})
+             print("    Updated incident with missing sessions.")
+             
+        return target_incident
 
     # 災害を新規作成
     print(f"  Creating busshi incident: {BUSSHI_INCIDENT_NAME}")
@@ -30,15 +74,7 @@ async def ensure_busshi_incident():
     )
 
     # 4つの部門セッションを作成
-    kind_labels = {
-        SessionKind.ACTIVITY_COMMAND: "活動指揮",
-        SessionKind.TRANSPORT_COORDINATION: "搬送調整",
-        SessionKind.INFO_ANALYSIS: "情報分析",
-        SessionKind.LOGISTICS_SUPPORT: "物資支援",
-    }
-
-    for kind in [SessionKind.ACTIVITY_COMMAND, SessionKind.TRANSPORT_COORDINATION,
-                 SessionKind.INFO_ANALYSIS, SessionKind.LOGISTICS_SUPPORT]:
+    for kind in required_kinds:
         title = f"{BUSSHI_INCIDENT_NAME} {BUSSHI_INCIDENT_DATE.strftime('%Y/%m/%d')} {kind_labels[kind]}"
         session = Session(
             title=title,
