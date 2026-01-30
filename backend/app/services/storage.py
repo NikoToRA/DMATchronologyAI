@@ -989,6 +989,26 @@ class StorageService:
         Returns:
             List of HQMaster objects.
         """
+        # Azure mode: persist config to Blob Storage
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/hq_master.json"
+            try:
+                data = await self._read_json(path)
+                if isinstance(data, list) and data:
+                    return [HQMaster(**hq) for hq in data]
+                if data is None or (isinstance(data, list) and not data):
+                    # Seed from bundled defaults on first run
+                    defaults = await self._load_default_hq_master()
+                    if defaults:
+                        await self._write_json(path, [hq.model_dump() for hq in defaults])  # type: ignore[arg-type]
+                        logger.info(f"Seeded HQ master to storage with {len(defaults)} entries")
+                    return defaults
+            except Exception as e:
+                logger.error(f"Failed to read HQ master from storage: {e}")
+                return await self._load_default_hq_master()
+            return []
+
+        # Local/dev mode: keep using the mounted config directory
         config_file = self.config_path / "hq_master.json"
         hq_list: List[HQMaster] = []
 
@@ -1195,6 +1215,18 @@ class StorageService:
         Raises:
             StorageWriteError: If saving fails.
         """
+        # Azure mode: persist config to Blob Storage
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/hq_master.json"
+            try:
+                await self._write_json(path, [hq.model_dump() for hq in hq_list])  # type: ignore[arg-type]
+                logger.info(f"Saved HQ master to storage with {len(hq_list)} entries")
+                return
+            except Exception as e:
+                logger.error(f"Failed to save HQ master to storage: {e}")
+                raise StorageWriteError(f"Failed to save HQ master: {e}") from e
+
+        # Local/dev mode: keep using the mounted config directory
         config_file = self.config_path / "hq_master.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         content = json.dumps(
@@ -1288,6 +1320,25 @@ class StorageService:
         Returns:
             ZoomCredentials object (may be unconfigured).
         """
+        # Azure mode: persist config to Blob Storage
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/zoom_credentials.json"
+            try:
+                data = await self._read_json(path)
+                if isinstance(data, dict) and data:
+                    return ZoomCredentials(**data)
+                if data is None:
+                    # Seed from bundled defaults on first run
+                    defaults = await self._load_default_zoom_credentials()
+                    await self._write_json(path, defaults.model_dump())  # type: ignore[arg-type]
+                    logger.info("Seeded Zoom credentials to storage")
+                    return defaults
+            except Exception as e:
+                logger.error(f"Failed to read Zoom credentials from storage: {e}")
+                return await self._load_default_zoom_credentials()
+            return ZoomCredentials()
+
+        # Local/dev mode: keep using the mounted config directory
         config_file = self.config_path / "zoom_credentials.json"
         if not config_file.exists():
             logger.debug("Zoom credentials config not found, returning defaults")
@@ -1311,6 +1362,18 @@ class StorageService:
         Raises:
             StorageWriteError: If saving fails.
         """
+        # Azure mode: persist config to Blob Storage
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/zoom_credentials.json"
+            try:
+                await self._write_json(path, credentials.model_dump())  # type: ignore[arg-type]
+                logger.info("Saved Zoom credentials to storage")
+                return
+            except Exception as e:
+                logger.error(f"Failed to save Zoom credentials to storage: {e}")
+                raise StorageWriteError(f"Failed to save Zoom credentials: {e}") from e
+
+        # Local/dev mode: keep using the mounted config directory
         config_file = self.config_path / "zoom_credentials.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         content = json.dumps(credentials.model_dump(), ensure_ascii=False, indent=2)
@@ -1331,6 +1394,25 @@ class StorageService:
         Returns:
             LLMSettings object with custom prompt or defaults.
         """
+        # Azure mode: persist config to Blob Storage
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/llm_settings.json"
+            try:
+                data = await self._read_json(path)
+                if isinstance(data, dict) and data:
+                    return LLMSettings(**data)
+                if data is None:
+                    # Seed from bundled defaults on first run
+                    defaults = await self._load_default_llm_settings()
+                    await self._write_json(path, defaults.model_dump())  # type: ignore[arg-type]
+                    logger.info("Seeded LLM settings to storage")
+                    return defaults
+            except Exception as e:
+                logger.error(f"Failed to read LLM settings from storage: {e}")
+                return await self._load_default_llm_settings()
+            return LLMSettings()
+
+        # Local/dev mode: keep using the mounted config directory
         config_file = self.config_path / "llm_settings.json"
         if not config_file.exists():
             logger.debug("LLM settings config not found, returning defaults")
@@ -1354,6 +1436,18 @@ class StorageService:
         Raises:
             StorageWriteError: If saving fails.
         """
+        # Azure mode: persist config to Blob Storage
+        if self.use_azure:
+            path = f"{self._CONFIG_BLOB_PREFIX}/llm_settings.json"
+            try:
+                await self._write_json(path, settings_data.model_dump())  # type: ignore[arg-type]
+                logger.info("Saved LLM settings to storage")
+                return
+            except Exception as e:
+                logger.error(f"Failed to save LLM settings to storage: {e}")
+                raise StorageWriteError(f"Failed to save LLM settings: {e}") from e
+
+        # Local/dev mode: keep using the mounted config directory
         config_file = self.config_path / "llm_settings.json"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         content = json.dumps(settings_data.model_dump(), ensure_ascii=False, indent=2)
@@ -1386,6 +1480,67 @@ class StorageService:
         except Exception as e:
             logger.error(f"Failed to load default user dictionary: {e}")
         return []
+
+    async def _load_default_hq_master(self) -> List[HQMaster]:
+        """
+        Load bundled default HQ master list (shipped with the backend image).
+        Used when running in Azure without a mounted /config directory.
+        """
+        try:
+            defaults_path = Path(__file__).resolve().parents[1] / "defaults" / "hq_master.json"
+            if not defaults_path.exists():
+                # Return minimal default if file doesn't exist
+                return [HQMaster(
+                    hq_name="都道府県調整本部",
+                    zoom_pattern="都道府県調整本部",
+                    active=True,
+                )]
+            async with aiofiles.open(defaults_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                data = json.loads(content)
+                if isinstance(data, list):
+                    return [HQMaster(**hq) for hq in data]
+        except Exception as e:
+            logger.error(f"Failed to load default HQ master: {e}")
+        return [HQMaster(
+            hq_name="都道府県調整本部",
+            zoom_pattern="都道府県調整本部",
+            active=True,
+        )]
+
+    async def _load_default_zoom_credentials(self) -> ZoomCredentials:
+        """
+        Load bundled default Zoom credentials (shipped with the backend image).
+        Used when running in Azure without a mounted /config directory.
+        """
+        try:
+            defaults_path = Path(__file__).resolve().parents[1] / "defaults" / "zoom_credentials.json"
+            if not defaults_path.exists():
+                return ZoomCredentials()
+            async with aiofiles.open(defaults_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                data = json.loads(content)
+                return ZoomCredentials(**data)
+        except Exception as e:
+            logger.error(f"Failed to load default Zoom credentials: {e}")
+        return ZoomCredentials()
+
+    async def _load_default_llm_settings(self) -> LLMSettings:
+        """
+        Load bundled default LLM settings (shipped with the backend image).
+        Used when running in Azure without a mounted /config directory.
+        """
+        try:
+            defaults_path = Path(__file__).resolve().parents[1] / "defaults" / "llm_settings.json"
+            if not defaults_path.exists():
+                return LLMSettings()
+            async with aiofiles.open(defaults_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                data = json.loads(content)
+                return LLMSettings(**data)
+        except Exception as e:
+            logger.error(f"Failed to load default LLM settings: {e}")
+        return LLMSettings()
 
     async def get_dictionary_entries(self) -> List[DictionaryEntry]:
         """

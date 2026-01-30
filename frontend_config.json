@@ -1,0 +1,179 @@
+{
+  "id": "/subscriptions/c216cd0d-f9ff-464d-86aa-7f1304eb2e73/resourceGroups/dmatAI/providers/Microsoft.App/containerapps/chronologyai-frontend",
+  "identity": {
+    "type": "None"
+  },
+  "location": "Japan East",
+  "name": "chronologyai-frontend",
+  "properties": {
+    "configuration": {
+      "activeRevisionsMode": "Single",
+      "dapr": null,
+      "identitySettings": [],
+      "ingress": {
+        "additionalPortMappings": null,
+        "allowInsecure": false,
+        "clientCertificateMode": null,
+        "corsPolicy": null,
+        "customDomains": null,
+        "exposedPort": 0,
+        "external": true,
+        "fqdn": "chronologyai-frontend.blackforest-2ac3dad5.japaneast.azurecontainerapps.io",
+        "ipSecurityRestrictions": null,
+        "stickySessions": null,
+        "targetPort": 3000,
+        "traffic": [
+          {
+            "latestRevision": true,
+            "weight": 100
+          }
+        ],
+        "transport": "Auto"
+      },
+      "maxInactiveRevisions": 100,
+      "registries": [
+        {
+          "identity": "",
+          "passwordSecretRef": "dmatchronologyacrazurecrio-dmatchronologyacr",
+          "server": "dmatchronologyacr.azurecr.io",
+          "username": "dmatchronologyacr"
+        }
+      ],
+      "runtime": null,
+      "secrets": [
+        {
+          "name": "dmatchronologyacrazurecrio-dmatchronologyacr"
+        }
+      ],
+      "service": null
+    },
+    "customDomainVerificationId": "7F1FD14E4CF2AB0F0895CAFDE57E506205AB086EA04EF7BAD5C582436C97186D",
+    "delegatedIdentities": [],
+    "environmentId": "/subscriptions/c216cd0d-f9ff-464d-86aa-7f1304eb2e73/resourceGroups/dmatAI/providers/Microsoft.App/managedEnvironments/dmat-containerapp-env",
+    "eventStreamEndpoint": "https://japaneast.azurecontainerapps.dev/subscriptions/c216cd0d-f9ff-464d-86aa-7f1304eb2e73/resourceGroups/dmatAI/containerApps/chronologyai-frontend/eventstream",
+    "latestReadyRevisionName": "chronologyai-frontend--0000015",
+    "latestRevisionFqdn": "chronologyai-frontend--0000015.blackforest-2ac3dad5.japaneast.azurecontainerapps.io",
+    "latestRevisionName": "chronologyai-frontend--0000015",
+    "managedEnvironmentId": "/subscriptions/c216cd0d-f9ff-464d-86aa-7f1304eb2e73/resourceGroups/dmatAI/providers/Microsoft.App/managedEnvironments/dmat-containerapp-env",
+    "outboundIpAddresses": [
+      "20.210.72.88",
+      "20.210.72.103",
+      "135.149.35.113",
+      "130.33.240.89",
+      "74.176.172.174",
+      "130.33.161.134",
+      "130.33.161.153",
+      "135.149.80.143",
+      "74.176.172.145",
+      "130.33.186.220",
+      "130.33.161.216",
+      "130.33.161.209",
+      "20.210.72.109",
+      "48.218.235.166",
+      "48.218.130.158",
+      "74.176.142.75",
+      "135.149.20.234",
+      "135.149.82.9",
+      "130.33.180.154",
+      "130.33.152.3",
+      "130.33.181.150",
+      "130.33.162.33",
+      "20.27.22.88",
+      "20.210.72.73",
+      "130.33.178.168",
+      "130.33.80.28",
+      "130.33.153.52",
+      "48.218.158.62",
+      "48.218.158.84",
+      "48.218.158.83",
+      "48.218.158.66",
+      "48.218.158.55",
+      "48.218.158.81",
+      "4.189.255.130",
+      "13.78.120.208",
+      "172.192.30.217",
+      "20.37.102.148",
+      "4.215.203.23",
+      "52.185.132.178",
+      "48.210.194.118",
+      "48.210.221.157",
+      "4.216.99.72",
+      "48.210.250.121",
+      "20.48.86.170",
+      "20.48.86.160",
+      "135.149.20.219",
+      "135.149.76.115",
+      "130.33.185.188",
+      "74.176.238.136",
+      "130.33.224.1",
+      "130.33.187.88",
+      "74.176.139.200",
+      "130.33.181.51",
+      "135.149.21.221",
+      "130.33.187.39",
+      "20.48.86.154",
+      "130.33.94.24",
+      "48.218.156.239",
+      "130.33.93.3",
+      "135.149.23.2",
+      "135.149.36.207",
+      "20.18.233.249",
+      "20.48.86.165",
+      "48.218.81.17",
+      "48.218.80.248",
+      "48.218.80.238",
+      "48.218.81.11",
+      "48.218.81.1",
+      "48.218.80.246",
+      "4.190.81.5"
+    ],
+    "provisioningState": "Succeeded",
+    "runningStatus": "Running",
+    "template": {
+      "containers": [
+        {
+          "env": [
+            {
+              "name": "NEXT_PUBLIC_API_URL",
+              "value": "https://chronologyai-backend.blackforest-2ac3dad5.japaneast.azurecontainerapps.io"
+            },
+            {
+              "name": "NEXT_PUBLIC_WS_URL",
+              "value": "chronologyai-backend.blackforest-2ac3dad5.japaneast.azurecontainerapps.io"
+            }
+          ],
+          "image": "dmatchronologyacr.azurecr.io/chronologyai-frontend:latest",
+          "name": "chronologyai-frontend",
+          "resources": {
+            "cpu": 0.5,
+            "ephemeralStorage": "2Gi",
+            "memory": "1Gi"
+          }
+        }
+      ],
+      "initContainers": null,
+      "revisionSuffix": "",
+      "scale": {
+        "cooldownPeriod": 300,
+        "maxReplicas": 3,
+        "minReplicas": 1,
+        "pollingInterval": 30,
+        "rules": null
+      },
+      "serviceBinds": null,
+      "terminationGracePeriodSeconds": null,
+      "volumes": null
+    },
+    "workloadProfileName": "Consumption"
+  },
+  "resourceGroup": "dmatAI",
+  "systemData": {
+    "createdAt": "2026-01-18T11:22:42.7442131",
+    "createdBy": "Hirayama@hirayamadr.onmicrosoft.com",
+    "createdByType": "User",
+    "lastModifiedAt": "2026-01-30T15:51:10.9554254",
+    "lastModifiedBy": "Hirayama@hirayamadr.onmicrosoft.com",
+    "lastModifiedByType": "User"
+  },
+  "type": "Microsoft.App/containerApps"
+}

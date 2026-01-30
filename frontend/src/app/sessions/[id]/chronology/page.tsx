@@ -18,6 +18,7 @@ export default function ChronologyPage() {
     entries,
     session,
     participants,
+    hqMaster,
     isEntriesLoading,
     updateEntry,
     filters,
@@ -63,6 +64,7 @@ export default function ChronologyPage() {
       <ChronologyFilters
         filters={filters}
         participants={participants}
+        hqMaster={hqMaster}
         onCategoryChange={handleCategoryChange}
         onHqChange={handleHqChange}
         onUnconfirmedOnlyChange={handleUnconfirmedOnlyChange}

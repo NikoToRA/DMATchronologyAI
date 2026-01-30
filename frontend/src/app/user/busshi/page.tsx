@@ -177,11 +177,10 @@ export default function BusshiLoginPage() {
                   {activeHqList.map((hq) => (
                     <label
                       key={hq.hq_id}
-                      className={`flex items-center p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                        selectedHqId === hq.hq_id
+                      className={`flex items-center p-4 rounded-xl border-2 cursor-pointer transition-all ${selectedHqId === hq.hq_id
                           ? 'border-yellow-500 bg-yellow-50'
                           : 'border-gray-200 hover:border-yellow-300'
-                      }`}
+                        }`}
                     >
                       <input
                         type="radio"
@@ -197,11 +196,10 @@ export default function BusshiLoginPage() {
                         </div>
                       </div>
                       <div
-                        className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
-                          selectedHqId === hq.hq_id
+                        className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedHqId === hq.hq_id
                             ? 'border-yellow-500 bg-yellow-500'
                             : 'border-gray-300'
-                        }`}
+                          }`}
                       >
                         {selectedHqId === hq.hq_id && (
                           <div className="w-2.5 h-2.5 rounded-full bg-white" />

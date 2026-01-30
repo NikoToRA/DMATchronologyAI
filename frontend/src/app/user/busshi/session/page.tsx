@@ -87,6 +87,7 @@ export default function BusshiSessionPage() {
   const {
     entries,
     participants,
+    hqMaster,
     isEntriesLoading,
     updateEntry,
     refetch,
@@ -584,6 +585,7 @@ export default function BusshiSessionPage() {
           <ChronologyFilters
             filters={filters}
             participants={participants}
+            hqMaster={hqMaster}
             onCategoryChange={handleCategoryChange}
             onHqChange={handleHqChange}
             onUnconfirmedOnlyChange={handleUnconfirmedOnlyChange}

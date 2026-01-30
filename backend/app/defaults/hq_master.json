@@ -1,0 +1,12 @@
+[
+  {
+    "hq_id": "default-hq-001",
+    "hq_name": "都道府県調整本部",
+    "zoom_pattern": "都道府県調整本部",
+    "active": true,
+    "include_activity_command": true,
+    "include_transport_coordination": true,
+    "include_info_analysis": true,
+    "include_logistics_support": true
+  }
+]

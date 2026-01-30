@@ -1,7 +1,7 @@
 'use client';
 
 import { Filter } from 'lucide-react';
-import type { ChronologyCategory, Participant } from '@/lib/api';
+import type { ChronologyCategory, Participant, HQMaster } from '@/lib/api';
 import type { ChronologyFilters as FiltersType } from '@/hooks/useChronology';
 import { CHRONOLOGY_CATEGORIES } from '@/hooks/useChronology';
 import { Checkbox } from '@/components/ui/FormField';
@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/FormField';
 interface ChronologyFiltersProps {
   filters: FiltersType;
   participants: Participant[] | undefined;
+  hqMaster?: HQMaster[] | undefined;
   onCategoryChange: (category: ChronologyCategory | '') => void;
   onHqChange: (hqId: string) => void;
   onUnconfirmedOnlyChange: (unconfirmedOnly: boolean) => void;
@@ -17,6 +18,7 @@ interface ChronologyFiltersProps {
 export function ChronologyFilters({
   filters,
   participants,
+  hqMaster,
   onCategoryChange,
   onHqChange,
   onUnconfirmedOnlyChange,
@@ -36,6 +38,7 @@ export function ChronologyFilters({
       <HQSelect
         value={filters.hqId}
         participants={participants}
+        hqMaster={hqMaster}
         onChange={onHqChange}
       />
 
@@ -72,11 +75,15 @@ function CategorySelect({ value, onChange }: CategorySelectProps) {
 interface HQSelectProps {
   value: string;
   participants: Participant[] | undefined;
+  hqMaster?: HQMaster[] | undefined;
   onChange: (hqId: string) => void;
 }
 
-function HQSelect({ value, participants, onChange }: HQSelectProps) {
-  const speakerOptions = buildSpeakerOptions(participants);
+function HQSelect({ value, participants, hqMaster, onChange }: HQSelectProps) {
+  // hqMasterがある場合はそれを優先、なければparticipantsからフォールバック
+  const speakerOptions = hqMaster && hqMaster.length > 0
+    ? buildHqMasterOptions(hqMaster)
+    : buildSpeakerOptions(participants);
   return (
     <select
       value={value}
@@ -91,6 +98,13 @@ function HQSelect({ value, participants, onChange }: HQSelectProps) {
       ))}
     </select>
   );
+}
+
+function buildHqMasterOptions(hqMaster: HQMaster[]): Array<{ hq_id: string; label: string }> {
+  return hqMaster
+    .filter((hq) => hq.active)
+    .map((hq) => ({ hq_id: hq.hq_id, label: hq.hq_name }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'ja'));
 }
 
 function buildSpeakerOptions(participants: Participant[] | undefined): Array<{ hq_id: string; label: string }> {
