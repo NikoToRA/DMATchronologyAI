@@ -43,7 +43,7 @@ export default function SessionsPage() {
     if (!selectedIncident || !allSessions) return [];
     const ids = new Set<string>();
     Object.values(selectedIncident.sessions ?? {}).forEach((id) => ids.add(id));
-    (selectedIncident.extra_sessions ?? []).forEach((x) => {
+    (selectedIncident?.extra_sessions ?? []).forEach((x) => {
       if (x?.session_id) ids.add(x.session_id);
     });
     return allSessions.filter((s) => ids.has(s.session_id));
@@ -391,8 +391,8 @@ export default function SessionsPage() {
                       <button
                         onClick={() => toggleHqActiveMutation.mutate({ hqId: hq.hq_id, active: !hq.active })}
                         className={`px-3 py-1 text-sm rounded ${hq.active
-                            ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                            : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                          ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                          : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
                           }`}
                       >
                         {hq.active ? '無効化' : '有効化'}
