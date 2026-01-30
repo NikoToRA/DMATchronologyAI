@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Package, AlertCircle, Building2 } from 'lucide-react';
 import { incidentsApi, sessionHqApi, api, Participant } from '@/lib/api';
 
-const INCIDENT_NAME = '2026年DMAT関東ブロック訓練_物資支援';
+const INCIDENT_NAME = '2026年DMAT関東ブロック訓練';
 
 export default function BusshiLoginPage() {
   const router = useRouter();
@@ -178,8 +178,8 @@ export default function BusshiLoginPage() {
                     <label
                       key={hq.hq_id}
                       className={`flex items-center p-4 rounded-xl border-2 cursor-pointer transition-all ${selectedHqId === hq.hq_id
-                          ? 'border-yellow-500 bg-yellow-50'
-                          : 'border-gray-200 hover:border-yellow-300'
+                        ? 'border-yellow-500 bg-yellow-50'
+                        : 'border-gray-200 hover:border-yellow-300'
                         }`}
                     >
                       <input
@@ -197,8 +197,8 @@ export default function BusshiLoginPage() {
                       </div>
                       <div
                         className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedHqId === hq.hq_id
-                            ? 'border-yellow-500 bg-yellow-500'
-                            : 'border-gray-300'
+                          ? 'border-yellow-500 bg-yellow-500'
+                          : 'border-gray-300'
                           }`}
                       >
                         {selectedHqId === hq.hq_id && (

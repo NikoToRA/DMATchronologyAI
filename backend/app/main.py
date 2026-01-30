@@ -10,7 +10,7 @@ from .config import settings as app_settings
 from .models.schemas import Incident, Session, SessionKind
 
 # 物資支援班専用UI用の災害設定
-BUSSHI_INCIDENT_NAME = "2026年DMAT関東ブロック訓練_物資支援"
+BUSSHI_INCIDENT_NAME = "2026年DMAT関東ブロック訓練"
 BUSSHI_INCIDENT_DATE = date(2026, 1, 30)
 
 
