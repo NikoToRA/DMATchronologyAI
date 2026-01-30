@@ -175,10 +175,11 @@ export default function SessionsPage() {
   const primarySessionId = useMemo(() => {
     if (!selectedIncident) return null;
     return (
-      selectedIncident.sessions.activity_command ||
-      selectedIncident.sessions.transport_coordination ||
-      selectedIncident.sessions.info_analysis ||
-      selectedIncident.sessions.logistics_support ||
+      selectedIncident.sessions?.activity_command ||
+      selectedIncident.sessions?.command_coordination ||
+      selectedIncident.sessions?.transport_coordination ||
+      selectedIncident.sessions?.info_analysis ||
+      selectedIncident.sessions?.logistics_support ||
       null
     );
   }, [selectedIncident]);
