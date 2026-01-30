@@ -377,9 +377,8 @@ export default function SessionsPage() {
                 {hqList.map((hq) => (
                   <div
                     key={hq.hq_id}
-                    className={`flex items-center justify-between p-3 rounded-lg border ${
-                      hq.active ? 'border-gray-200 bg-gray-50' : 'border-gray-100 bg-gray-100 opacity-60'
-                    }`}
+                    className={`flex items-center justify-between p-3 rounded-lg border ${hq.active ? 'border-gray-200 bg-gray-50' : 'border-gray-100 bg-gray-100 opacity-60'
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       <Building2 className="h-5 w-5 text-gray-500" />
@@ -391,11 +390,10 @@ export default function SessionsPage() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => toggleHqActiveMutation.mutate({ hqId: hq.hq_id, active: !hq.active })}
-                        className={`px-3 py-1 text-sm rounded ${
-                          hq.active
+                        className={`px-3 py-1 text-sm rounded ${hq.active
                             ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                             : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-                        }`}
+                          }`}
                       >
                         {hq.active ? '無効化' : '有効化'}
                       </button>
@@ -423,10 +421,10 @@ export default function SessionsPage() {
 
 function getSessionKindLabel(kind?: string): string {
   const labels: Record<string, string> = {
-    activity_command: '活動指揮',
-    transport_coordination: '搬送調整',
-    info_analysis: '情報分析',
-    logistics_support: '物資支援',
+    activity_command: '統括・調整班（活動指揮）',
+    transport_coordination: '搬送調整班',
+    info_analysis: '情報分析班',
+    logistics_support: '物資支援班',
     extra: '追加',
   };
   return labels[kind ?? ''] ?? kind ?? '';
